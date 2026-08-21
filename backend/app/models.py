@@ -1,13 +1,9 @@
-"""数据库模型"""
+"""ORM 模型（SQLAlchemy）"""
 import datetime
-import re
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from .config import settings
-engine = create_engine(settings.database_url, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float
+
+from .core.database import Base
 
 
 class Folder(Base):
@@ -78,30 +74,3 @@ class ChatMessage(Base):
     reasoning = Column(Text, default="")  # DeepSeek 思维链（下轮回填保持连续性）
     seq = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-def init_db():
-    Base.metadata.create_all(bind=engine)
-    _migrate()
-
-
-def _migrate():
-    """老库增量迁移：给 chat_sessions 补 name 列（若已存在则跳过）"""
-    import sqlalchemy as sa
-    insp = sa.inspect(engine)
-    tables = insp.get_table_names()
-    if "chat_sessions" in tables:
-        cols = {c["name"] for c in insp.get_columns("chat_sessions")}
-        if "name" not in cols:
-            with engine.begin() as conn:
-                conn.execute(sa.text("ALTER TABLE chat_sessions ADD COLUMN name TEXT"))
-            print("[migrate] chat_sessions 已添加 name 列")
-    if "chat_messages" not in tables:
-        print("[migrate] 将创建 chat_messages 表")
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()

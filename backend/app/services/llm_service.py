@@ -6,7 +6,7 @@ import json
 import httpx
 from typing import AsyncIterator, Optional, Tuple
 
-from ..config import settings
+from ..core.config import settings
 
 DEEPSEEK_API = "https://api.deepseek.com/v1/chat/completions"
 ZHIPU_API = "https://open.bigmodel.cn/api/paas/v4/chat/completions"

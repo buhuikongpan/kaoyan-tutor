@@ -3,7 +3,8 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 
 # 项目根目录（backend/ 的上级）
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# 本文件位于 app/core/config.py：parents[3] = core → app → backend → 项目根
+BASE_DIR = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):

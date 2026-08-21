@@ -11,8 +11,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..services.llm_service import chat_completion_stream, vision_analyze
-from ..database import get_db, Subtitle, ChatSession, ChatMessage
+from ...services.llm_service import chat_completion_stream, vision_analyze
+from ...models import Subtitle, ChatSession, ChatMessage
+from ..deps import get_db
 
 router = APIRouter(prefix="/api/chat", tags=["聊天"])
 

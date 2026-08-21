@@ -1,10 +1,10 @@
 """文件夹管理 — 树形目录结构"""
 from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import Optional
 
-from ..database import get_db, Folder, Video
+from ...models import Folder, Video
+from ..deps import get_db
+from ...schemas.folder import FolderCreate, FolderRename
 
 router = APIRouter(prefix="/api/folders", tags=["文件夹"])
 
@@ -56,12 +56,6 @@ def get_folder_tree(subject: str = Query(""), db: Session = Depends(get_db)):
     return {"folders": tree_roots, "uncategorized": folder_roots}
 
 
-class FolderCreate(BaseModel):
-    subject: str
-    name: str
-    parent_id: int = 0
-
-
 @router.post("/create")
 def create_folder(data: FolderCreate, db: Session = Depends(get_db)):
     """创建文件夹"""
@@ -70,10 +64,6 @@ def create_folder(data: FolderCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(folder)
     return {"id": folder.id, "name": folder.name}
-
-
-class FolderRename(BaseModel):
-    name: str
 
 
 @router.put("/{folder_id}/rename")

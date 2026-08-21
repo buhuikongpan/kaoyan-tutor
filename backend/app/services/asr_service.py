@@ -8,7 +8,7 @@ import tempfile
 import asyncio
 import httpx
 from typing import List, Tuple, Optional
-from ..config import settings
+from ..core.config import settings
 
 QWEN_ASR_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 CHUNK_SEC = 50

@@ -70,25 +70,48 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ```
 DIFY考研学习平台/
-├── .env / .env.example        # API Key + PLATFORM_TOKEN 配置
 ├── backend/                   # FastAPI 后端（裸跑）
-│   └── app/
-│       ├── main.py            # 入口（含鉴权中间件）
-│       ├── config.py          # 配置
-│       ├── database.py        # SQLite
-│       ├── routers/
-│       │   ├── videos.py      # 视频/字幕(ASR)
-│       │   ├── chat.py        # 聊天（SSE 流式，直连 DeepSeek/智谱）
-│       │   ├── folders.py     # 文件夹
-│       │   └── config.py      # 配置状态（只读）
-│       └── services/
-│           ├── llm_service.py # DeepSeek 流式聊天 + 智谱看图
-│           └── asr_service.py # 千问 ASR
+│   ├── requirements.txt
+│   ├── app/
+│   │   ├── main.py            # 入口（含鉴权中间件）
+│   │   ├── models.py          # ORM 模型（SQLAlchemy）
+│   │   ├── core/
+│   │   │   ├── config.py      # 配置（settings + 项目根计算）
+│   │   │   └── database.py    # 引擎 / 会话 / 建表迁移
+│   │   ├── api/
+│   │   │   ├── deps.py        # 公共依赖（get_db）
+│   │   │   └── routes/
+│   │   │       ├── videos.py  # 视频/字幕(ASR)
+│   │   │       ├── chat.py    # 聊天（SSE 流式，直连 DeepSeek/智谱）
+│   │   │       ├── folders.py # 文件夹
+│   │   │       └── config.py  # 配置状态（只读）
+│   │   ├── schemas/           # Pydantic 请求模型
+│   │   └── services/
+│   │       ├── llm_service.py # DeepSeek 流式聊天 + 智谱看图
+│   │       └── asr_service.py # 千问 ASR
+│   └── tests/                 # 单元测试（unittest，无 pytest 依赖）
 ├── frontend/                  # 前端页面（原生 JS + KaTeX）
-├── storage/                   # 视频/字幕
-├── data/                      # SQLite + 日志
-└── scripts/start.bat          # 一键启动
+│   ├── index.html
+│   ├── css/  js/  vendor/
+├── scripts/start.bat          # 一键启动
+├── docs/                      # 项目文档（Agent 提示词、备忘）
+├── storage/                   # 视频/字幕（运行时数据）
+├── data/                      # SQLite + 日志（运行时数据）
+├── .env / .env.example        # API Key + PLATFORM_TOKEN 配置
+├── .gitignore
+└── README.md
 ```
+
+### 运行单元测试
+
+```bash
+cd backend
+python -m unittest tests.test_smoke tests.test_stream_mock -v
+```
+
+- `test_smoke`：基础路由与参数校验
+- `test_stream_mock`：用 httpx.MockTransport 内存模拟 DeepSeek 的 SSE 响应，
+  验证流式事件序列与落库逻辑（**不访问外网，不消耗 API 配额**）
 
 ---
 

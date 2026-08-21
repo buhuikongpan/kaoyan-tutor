@@ -11,9 +11,10 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Q
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from ..config import settings
-from ..database import get_db, Video, Subtitle
-from ..services.asr_service import transcribe_audio
+from ...core.config import settings
+from ...models import Video, Subtitle
+from ..deps import get_db
+from ...services.asr_service import transcribe_audio
 
 
 router = APIRouter(prefix="/api/videos", tags=["视频管理"])

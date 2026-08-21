@@ -8,9 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import settings, BASE_DIR
-from .database import init_db
-from .routers import videos, chat, config, folders
+from .core.config import settings, BASE_DIR
+from .core.database import init_db, SessionLocal
+from .models import Video
+from .api.routes import videos, chat, config, folders
 
 # SQLite 数据库：放在项目 data 目录（避免容器化遗留路径）
 DB_PATH = str(BASE_DIR / "data" / "kaoyan.db")
@@ -70,8 +71,6 @@ app.include_router(folders.router)
 init_db()
 
 # 启动时重置卡住的字幕提取状态
-from .database import Video
-from .database import SessionLocal
 try:
     s = SessionLocal()
     stuck = s.query(Video).filter(Video.subtitle_status == "processing").all()
