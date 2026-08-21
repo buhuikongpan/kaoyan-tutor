@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考研学习平台</title>
+    <link rel="stylesheet" href="css/style.css?v=5">
+</head>
+<body>
+    <div class="app">
+        <!-- 顶部导航 -->
+        <header class="header">
+            <div class="logo">📚 考研学习平台</div>
+            <div class="header-center">
+                <!-- Agent 切换 -->
+                <div class="mode-tabs">
+                    <button class="mode-tab active" data-mode="A" onclick="switchMode('A')">💬 即时问答</button>
+                    <button class="mode-tab" data-mode="B" onclick="switchMode('B')">🎯 引导输出</button>
+                    <button class="mode-tab" data-mode="C" onclick="switchMode('C')">📝 课后问答</button>
+                </div>
+                <!-- 科目切换 -->
+                <div class="subject-tabs">
+                    <button class="subject-tab active" data-subject="math" onclick="switchSubject('math')">📐 数学</button>
+                    <button class="subject-tab" data-subject="english" onclick="switchSubject('english')">📖 英语</button>
+                    <button class="subject-tab" data-subject="politics" onclick="switchSubject('politics')">🗳️ 政治</button>
+                </div>
+            </div>
+            <button class="btn-settings" onclick="showSettings()">⚙️</button>
+        </header>
+
+        <!-- 主内容区 -->
+        <div class="main-content">
+            <!-- 左侧：视频列表（从上到下） -->
+            <aside class="video-sidebar">
+                <div class="sidebar-header">
+                    <span class="sidebar-title">📁 视频目录</span>
+                    <div class="sidebar-actions">
+                        <button class="btn-sm" onclick="showNewFolderDialog()" title="新建文件夹">📂</button>
+                        <button class="btn-sm" onclick="document.getElementById('folderUploadInput').click()" title="扫描文件夹上传">📤</button>
+                        <button class="btn-sm btn-primary-sm" onclick="document.getElementById('uploadInput').click()" title="上传视频">＋</button>
+                    </div>
+                </div>
+                <div class="sidebar-body" id="videoTreeBody">
+                    <div class="loading" id="pageLoadCheck">⏳ 如果这句话一直不消失，说明 JS 没加载</div>
+                </div>
+                <input type="file" id="uploadInput" accept="video/mp4,video/avi,video/mkv,video/mov" style="display:none" onchange="uploadVideo(this)">
+                <input type="file" id="folderUploadInput" style="display:none" webkitdirectory multiple onchange="uploadFolder(this)">
+            </aside>
+
+            <div class="splitter" id="splitterSidebar" title="拖动调整视频目录宽度"></div>
+
+            <!-- 中间：视频播放区 -->
+            <div class="video-center">
+                <div class="video-player-wrapper" id="videoWrapper">
+                    <video id="videoPlayer" controls preload="auto">
+                        您的浏览器不支持视频播放
+                    </video>
+                    <div class="video-subtitle-overlay" id="videoSubtitleOverlay"></div>
+                    <div class="video-controls-overlay" id="speedControls">
+                        <button class="speed-btn" onclick="setSpeed(0.5)">0.5x</button>
+                        <button class="speed-btn active" onclick="setSpeed(1)">1x</button>
+                        <button class="speed-btn" onclick="setSpeed(1.5)">1.5x</button>
+                        <button class="speed-btn" onclick="setSpeed(2)">2x</button>
+                        <button class="speed-btn" onclick="setSpeed(2.5)">2.5x</button>
+                        <button class="speed-btn" onclick="setSpeed(3)">3x</button>
+                        <button class="speed-btn" onclick="setSpeed(4)">4x</button>
+                        <button class="speed-btn" onclick="setSpeed(5)">5x</button>
+                        <span class="speed-sep"></span>
+                        <button class="speed-btn" onclick="togglePip()" title="画中画">🖼️</button>
+                        <button class="speed-btn" onclick="toggleSubtitleOverlay()" title="字幕开关">📄</button>
+                        <button class="speed-btn" id="captureToggleBtn" onclick="toggleAutoCapture()" title="自动截图当前画面">🎥</button>
+                    </div>
+                    <div class="video-placeholder" id="videoPlaceholder">
+                        <div class="placeholder-icon">🎬</div>
+                        <div class="placeholder-text">从左侧选择视频开始学习</div>
+                    </div>
+                </div>
+                <!-- 字幕面板（仅 A 模式显示，带时间戳点击跳转） -->
+                <div class="subtitle-panel" id="subtitlePanel" style="display:none">
+                    <div class="subtitle-header">
+                        <span>📺 字幕 <span class="subtitle-count" id="subtitleCount"></span></span>
+                        <button class="btn-sm" onclick="toggleSubtitlePanel()" id="subtitleToggleBtn">收起</button>
+                    </div>
+                    <div class="subtitle-list" id="subtitleList">
+                        <div class="loading">加载字幕中...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧：聊天区 -->
+            <div class="splitter" id="splitterChat" title="拖动调整聊天区宽度"></div>
+            <div class="chat-panel">
+                <div class="chat-header">
+                    <span id="chatModeLabel">💬 即时问答</span>
+                    <span class="chat-subject" id="chatSubjectLabel">📐 数学</span>
+                    <div class="chat-header-actions">
+                        <button class="btn-sm" onclick="toggleConversationList()" title="显示/隐藏对话列表">☰</button>
+                        <button class="btn-sm btn-primary-sm" onclick="newConversation()" title="新对话">＋</button>
+                    </div>
+                </div>
+                <div class="chat-body">
+                    <div class="conv-sidebar" id="conversationSidebar">
+                        <div class="conv-sb-header">
+                            <span>📁 我的对话</span>
+                            <span class="conv-sb-actions">
+                                <button class="btn-sm" onclick="collapseConversationSidebar()" title="收起">◀</button>
+                                <button class="btn-sm btn-primary-sm" onclick="newConversation()" title="新对话">＋</button>
+                            </span>
+                        </div>
+                        <div class="conv-body" id="conversationList"></div>
+                    </div>
+                    <div class="conv-resizer" id="convSidebarResizer" title="拖动调整宽度"></div>
+                    <div class="chat-main">
+                        <div class="chat-messages" id="chatMessages">
+                            <div class="message system">
+                                <div class="msg-content">👋 选择视频开始学习，或直接提问！</div>
+                            </div>
+                        </div>
+                        <div class="chat-input-area">
+                            <div class="input-row">
+                                <div class="input-extra">
+                                    <button class="btn-img" onclick="document.getElementById('imgInput').click()" title="上传图片/草稿">🖼️</button>
+                                    <input type="file" id="imgInput" accept="image/*" style="display:none" onchange="onImagePick(this)">
+                                </div>
+                                <textarea id="chatInput" rows="2" placeholder="输入问题，回车发送..." onkeydown="onInputKeydown(event)" onpaste="onPaste(event)"></textarea>
+                                <button class="btn-send" id="btnSend" onclick="sendMessage()">发送</button>
+                            </div>
+                            <div class="image-preview" id="imagePreview" style="display:none">
+                                <img id="previewImg" src="" alt="预览">
+                                <button class="btn-remove-img" onclick="removeImage()">✕</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置弹窗 -->
+    <div class="modal-overlay" id="settingsModal" style="display:none" onclick="closeSettings(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h2>⚙️ 设置</h2>
+                <button class="btn-close" onclick="closeSettings()">✕</button>
+            </div>
+            <div class="modal-body">
+                <h3 style="margin-bottom:12px">📋 服务端配置状态</h3>
+                <div class="form-card">
+                    <p id="stDeepseek">… 检测中 …</p>
+                    <p id="stZhipu">…</p>
+                    <p id="stQwen">…</p>
+                    <p id="stAuth">…</p>
+                    <div style="font-size:12px;color:#999;margin-top:6px">
+                        所有 Key 只在服务器 <code>.env</code> 中配置（见 <code>.env.example</code>），平台不再提供网页写入。
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>🔐 访问令牌（可选）</label>
+                    <div class="form-card">
+                        <input type="text" id="setToken" placeholder="服务器 .env 中 PLATFORM_TOKEN 的值（留空则不携带）">
+                        <div style="font-size:12px;color:#999;margin-top:4px">
+                            若服务器已启用 PLATFORM_TOKEN，所有接口需此令牌才能访问。
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn-primary" onclick="saveSettings()">💾 保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 内联测试：验证 JS 是否能运行 -->
+    <script src="js/app.js?v=6"></script>
+    <!-- KaTeX（本地化，不依赖 CDN，保证公式渲染稳定） -->
+    <link rel="stylesheet" href="vendor/katex/katex.min.css">
+    <script src="vendor/katex/katex.min.js" defer></script>
+</body>
+</html>

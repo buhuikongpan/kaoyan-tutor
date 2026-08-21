@@ -1,0 +1,44 @@
+"""应用配置"""
+from pathlib import Path
+from pydantic_settings import BaseSettings
+
+# 项目根目录（backend/ 的上级）
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+class Settings(BaseSettings):
+    # 服务端口
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+    # 访问令牌：为空 = 不鉴权（默认开箱即用）；设置后所有 /api 接口需
+    # Authorization: Bearer <token>（视频流额外支持 ?token= 查询参数，
+    # 因为 <video> 标签无法携带请求头）
+    platform_token: str = ""
+
+    # 存储路径（项目内相对路径，脱离 Docker 后可移植）
+    storage_dir: str = str(BASE_DIR / "storage")
+    video_dir: str = str(BASE_DIR / "storage" / "videos")
+    subtitle_dir: str = str(BASE_DIR / "storage" / "subtitles")
+
+    # 数据库（SQLite 放在项目 data 目录）
+    database_url: str = f"sqlite:///{BASE_DIR / 'data' / 'kaoyan.db'}"
+    data_dir: str = str(BASE_DIR / "data")  # 持久化备份目录
+
+    # DeepSeek 配置（主聊天模型）
+    deepseek_api_key: str = ""
+
+    # 智谱 GLM-4V 配置（视觉分析模型）
+    zhipu_api_key: str = ""
+
+    # 千问（语音识别 / ASR，字幕提取）
+    qwen_api_key: str = ""
+
+    class Config:
+        env_file = str(BASE_DIR / ".env")
+        env_file_encoding = "utf-8"
+        # .env 里可能存在已废弃的键（迁移历史），忽略而非启动崩溃
+        extra = "ignore"
+
+
+settings = Settings()
