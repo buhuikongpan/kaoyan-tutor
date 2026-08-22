@@ -43,7 +43,7 @@ function resetViewportScroll() {
         document.body.scrollTop = 0;
     } catch (e) {}
 }
-document.addEventListener('DOMContentLoaded', () => { resetViewportScroll(); loadTree(); switchMode('A'); setupSplitters(); initConvResizer(); restoreConvSidebarState(); restoreActiveConversation(); });
+document.addEventListener('DOMContentLoaded', () => { resetViewportScroll(); switchMode('A'); setupSplitters(); initConvResizer(); restoreConvSidebarState(); loadTree().then(() => restoreActiveConversation()); });
 
 // 终极兜底：任何时刻 document 被滚动（滚动锚定/浏览器内部行为），立即拉回顶部。
 // 用 capture 阶段监听，抢在浏览器完成滚动渲染前复位，防止顶部导航被顶出屏幕、视频滚出视口后黑屏。
@@ -310,12 +310,25 @@ async function playVideo(videoId) {
 
     const video = document.getElementById('videoPlayer');
     const placeholder = document.getElementById('videoPlaceholder');
-    placeholder.style.display = 'none';
-    video.style.display = 'block';
+
     // <video> 标签无法携带 Authorization 请求头，token 走查询参数（服务端两种都认）
     const tk = getApiToken();
     video.src = getApiUrl(`/api/videos/stream/${videoId}`) + (tk ? `?token=${encodeURIComponent(tk)}` : '');
-    video.play();
+
+    // 等待视频元数据加载成功后再切换显示状态（防鉴权失败/文件不存在导致黑屏）
+    video.onloadedmetadata = () => {
+        placeholder.style.display = 'none';
+        video.style.display = 'block';
+        video.play();
+        video.onerror = null; // 成功加载后移除错误处理器
+    };
+
+    // 加载失败时保持占位符可见并提示
+    video.onerror = () => {
+        video.style.display = 'none';
+        placeholder.style.display = 'flex';
+        addSystemMessage(`⚠️ 视频加载失败，请检查网络或访问令牌`);
+    };
 
     await loadSubtitles(videoId);
 
@@ -920,7 +933,19 @@ function showTyping() { const id=++typingCount;
     scrollChat(); return id; }
 function removeTyping(id) { const e=document.getElementById(`typing-${id}`); if(e) e.remove(); }
 function clearChat() { document.getElementById('chatMessages').innerHTML=''; }
-function scrollChat() { document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight; }
+function scrollChat() {
+    const box = document.getElementById('chatMessages');
+    if (!box || !box.scrollHeight) return;
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                box.scrollTop = box.scrollHeight;
+            });
+        });
+    });
+    // 兜底：100ms 后再滚一次（防 KaTeX / 图片异步加载导致布局延迟）
+    setTimeout(() => { if (box) box.scrollTop = box.scrollHeight; }, 100);
+}
 
 // ===== 会话管理（新建/删除/重命名/选择/按科目分组） =====
 function convLsKey() { return `kaoyan_conv_${state.subject}_${state.mode}`; }
@@ -1020,13 +1045,22 @@ async function selectConversation(convId) {
         const resp = await apiFetch(`/api/chat/${convId}/history`);
         if (!resp.ok) throw new Error('加载失败');
         const d = await resp.json();
+        // 一次性拼出全部 HTML 再写入 DOM，避免逐步 append 触发滚动锚定
+        const box = document.getElementById('chatMessages');
+        let html = '';
         for (const msg of d.messages) {
-            if (msg.role === 'user') addUserMessage(msg.content, undefined);
-            else if (msg.role === 'assistant') addAssistantMessage(msg.content);
+            if (msg.role === 'user') {
+                html += `<div class="message user"><div class="msg-content">${escHtml(msg.content)}</div><div class="msg-time">${time()}</div></div>`;
+            } else if (msg.role === 'assistant') {
+                html += `<div class="message assistant"><div class="msg-content">${renderMath(escHtml(msg.content))}</div><div class="msg-time">${time()}</div></div>`;
+            }
         }
-        if (!d.messages.length) addSystemMessage('（空对话）');
+        if (!d.messages.length) html += '<div class="message system"><div class="msg-content">（空对话）</div></div>';
+        box.innerHTML = html;
+        // 布局完成后再滚到底部（scrollChat 内部有三层 rAF + 100ms 兜底）
+        scrollChat();
         loadConversations();
-    } catch(e){ addSystemMessage('⚠️ '+e.message); }
+    } catch(e){ addSystemMessage('️ '+e.message); }
 }
 
 async function renameConversation(convId) {
