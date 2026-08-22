@@ -726,9 +726,9 @@ video::cue(b) {
 .modal-content {
     background: white;
     border-radius: 12px;
-    width: 520px;
-    max-width: 90vw;
-    max-height: 85vh;
+    width: 580px;
+    max-width: 92vw;
+    max-height: 88vh;
     overflow-y: auto;
     box-shadow: 0 8px 32px rgba(0,0,0,0.2);
 }
@@ -763,6 +763,45 @@ video::cue(b) {
 .form-card input:last-of-type { margin-bottom: 0; }
 .form-card ol { margin: 6px 0; padding-left: 18px; font-size: 13px; }
 .form-card ol a { color: #1a73e8; }
+
+/* ===== 模型配置设置页表单细节 ===== */
+.form-card > label { margin-top: 6px; }          /* 组内每个字段标签分组间距 */
+.form-card input[type="text"],
+.form-card input[type="password"] { width: 100%; }
+.form-card input[type="checkbox"] { width: auto; margin: 0 6px 0 0; }  /* checkbox 不被拉伸 */
+/* 模型名称 + 获取按钮同排两端 */
+.model-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 6px;
+}
+.model-row label { margin: 0; }
+.model-row .btn-sm {
+    flex-shrink: 0;
+    margin-left: 8px;
+    width: auto;                     /* 覆盖通用图标按钮的 28x28，变文字按钮 */
+    height: auto;
+    padding: 4px 10px;
+    font-size: 12px;
+    border: 1px solid #d9d9d9;
+    background: white;
+    color: #1a73e8;
+    white-space: nowrap;
+}
+.model-row .btn-sm:hover { background: #eef3fd; }
+/* 勾选项（多模态/启用视觉辅助） */
+.checkbox-row {
+    display: flex !important;
+    align-items: center;
+    font-weight: 400 !important;
+    font-size: 12.5px;
+    color: #555;
+    margin-top: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+.checkbox-row input[type="checkbox"] { flex-shrink: 0; }
 .btn-primary {
     padding: 8px 24px;
     background: #1a73e8;

@@ -93,6 +93,33 @@ class ModelConfigTest(unittest.TestCase):
         finally:
             cfg_mod.httpx.AsyncClient = real_cls
 
+    def test_list_models_full_url(self):
+        # 地址输完整 /chat/completions 时，应自动提取 base 后请求 /models
+        import app.api.routes.config as cfg_mod
+        from httpx import MockTransport, Request, Response as HResponse
+
+        seen = {}
+
+        async def fake_models(request: Request) -> HResponse:
+            seen["url"] = str(request.url)
+            return HResponse(200, json={"data": [{"id": "m1"}]})
+
+        real_cls = cfg_mod.httpx.AsyncClient
+
+        class _Mock(real_cls):
+            def __init__(self, *args, **kwargs):
+                super().__init__(transport=MockTransport(fake_models), *args, **kwargs)
+
+        cfg_mod.httpx.AsyncClient = _Mock
+        try:
+            r = client.post("/api/config/list-models", json={
+                "base_url": "https://example.com/v1/chat/completions", "api_key": "k",
+            })
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(seen.get("url"), "https://example.com/v1/models")
+        finally:
+            cfg_mod.httpx.AsyncClient = real_cls
+
 
 if __name__ == "__main__":
     unittest.main()

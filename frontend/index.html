@@ -5,7 +5,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>考研学习平台</title>
-    <link rel="stylesheet" href="css/style.css?v=7">
+    <link rel="stylesheet" href="css/style.css?v=8">
 </head>
 <body>
     <div class="app">
@@ -139,7 +139,7 @@
 
     <!-- 设置弹窗 -->
     <div class="modal-overlay" id="settingsModal" style="display:none" onclick="closeSettings(event)">
-        <div class="modal-content" style="max-width:560px" onclick="event.stopPropagation()">
+        <div class="modal-content" style="max-width:600px" onclick="event.stopPropagation()">
             <div class="modal-header">
                 <h2>⚙️ 模型设置</h2>
                 <button class="btn-close" onclick="closeSettings()">✕</button>
@@ -149,11 +149,11 @@
                 <div class="form-group">
                     <label>🧠 主模型（聊天 / 总结推理）</label>
                     <div class="form-card">
-                        <label>API 地址（OpenAI 兼容，如 https://api.deepseek.com/v1）</label>
-                        <input type="text" id="setMainBaseUrl" placeholder="https://api.deepseek.com/v1">
+                        <label>API 地址（可输 base 或完整 /chat/completions 全称）</label>
+                        <input type="text" id="setMainBaseUrl" placeholder="https://api.deepseek.com/v1 或完整 https://api.deepseek.com/v1/chat/completions">
                         <label>API Key（留空 = 保持已有 Key）</label>
                         <input type="password" id="setMainKey" placeholder="sk-...">
-                        <label>模型名称 <button class="btn-sm" onclick="fetchModels('main')" title="从 API 拉取可用模型">🔍 获取模型</button></label>
+                        <div class="model-row"><label>模型名称</label><button class="btn-sm" onclick="fetchModels('main')" title="从 API 拉取可用模型">🔍 获取模型</button></div>
                         <input type="text" id="setMainModel" list="mainModelList" placeholder="可手输，或点「获取模型」自动拉取">
                         <datalist id="mainModelList"></datalist>
                         <label class="checkbox-row"><input type="checkbox" id="setMainMultimodal"> 主模型支持多模态（可直接发图片，无需视觉辅助）</label>
@@ -164,11 +164,11 @@
                     <label>👁️ 视觉辅助模型（看图；主模型支持多模态时可关闭）</label>
                     <div class="form-card">
                         <label class="checkbox-row"><input type="checkbox" id="setVisionEnabled" checked> 启用视觉辅助</label>
-                        <label>API 地址</label>
-                        <input type="text" id="setVisionBaseUrl" placeholder="https://open.bigmodel.cn/api/paas/v4">
+                        <label>API 地址（可输 base 或完整 /chat/completions 全称）</label>
+                        <input type="text" id="setVisionBaseUrl" placeholder="https://open.bigmodel.cn/api/paas/v4 或完整端点">
                         <label>API Key（留空 = 保持已有 Key）</label>
                         <input type="password" id="setVisionKey" placeholder="...">
-                        <label>模型名称 <button class="btn-sm" onclick="fetchModels('vision')" title="从 API 拉取可用模型">🔍 获取模型</button></label>
+                        <div class="model-row"><label>模型名称</label><button class="btn-sm" onclick="fetchModels('vision')" title="从 API 拉取可用模型">🔍 获取模型</button></div>
                         <input type="text" id="setVisionModel" list="visionModelList" placeholder="可手输，或点「获取模型」自动拉取">
                         <datalist id="visionModelList"></datalist>
                     </div>
@@ -177,11 +177,11 @@
                 <div class="form-group">
                     <label>🎬 语音识别 ASR（视频字幕）</label>
                     <div class="form-card">
-                        <label>API 地址</label>
-                        <input type="text" id="setAsrBaseUrl" placeholder="https://dashscope.aliyuncs.com">
+                        <label>API 地址（可输 base 或完整端点）</label>
+                        <input type="text" id="setAsrBaseUrl" placeholder="https://dashscope.aliyuncs.com 或完整端点">
                         <label>API Key（留空 = 保持已有 Key）</label>
                         <input type="password" id="setAsrKey" placeholder="sk-...">
-                        <label>模型名称 <button class="btn-sm" onclick="fetchModels('asr')" title="从 API 拉取可用模型">🔍 获取模型</button></label>
+                        <div class="model-row"><label>模型名称</label><button class="btn-sm" onclick="fetchModels('asr')" title="从 API 拉取可用模型">🔍 获取模型</button></div>
                         <input type="text" id="setAsrModel" list="asrModelList" placeholder="可手输，或点「获取模型」自动拉取">
                         <datalist id="asrModelList"></datalist>
                     </div>

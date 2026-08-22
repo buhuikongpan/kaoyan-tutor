@@ -77,12 +77,17 @@ class ListModelsIn(BaseModel):
 async def list_models(data: ListModelsIn):
     """从 OpenAI 兼容端点拉取真实可用的模型列表（GET {base_url}/models）。
 
-    用当前表单填写的地址和 Key 临时请求（不落库）；端点不支持时返回 error，
-    由前端提示用户手动输入模型名。
+    用当前表单填写的地址和 Key 临时请求（不落库）；地址兼容两种写法：
+      - base 形式：https://api.deepseek.com/v1
+      - 完整端点：https://api.deepseek.com/v1/chat/completions（自动提取 base）
+    端点不支持时返回 error，由前端提示用户手动输入模型名。
     """
     base_url = (data.base_url or "").strip().rstrip("/")
     if not base_url:
         raise HTTPException(400, "请先填写 API 地址")
+    # 兼容完整端点输入：去掉 /chat/completions 尾巴取 base
+    if base_url.endswith("/chat/completions"):
+        base_url = base_url[: -len("/chat/completions")].rstrip("/")
     headers = {}
     if data.api_key:
         headers["Authorization"] = f"Bearer {data.api_key}"
