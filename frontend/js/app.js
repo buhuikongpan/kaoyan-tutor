@@ -1196,6 +1196,45 @@ async function loadModelConfig() {
         if (c.asr && !c.asr.has_key) document.getElementById('setAsrKey').placeholder = '尚未配置 Key';
     } catch (e) {}
 }
+// 从 OpenAI 兼容端点拉取可用模型列表，填充对应 datalist（不落库，用表单当前值）
+async function fetchModels(section) {
+    const ids = section === 'main'
+        ? { base: 'setMainBaseUrl', key: 'setMainKey', model: 'setMainModel', list: 'mainModelList' }
+        : section === 'vision'
+        ? { base: 'setVisionBaseUrl', key: 'setVisionKey', model: 'setVisionModel', list: 'visionModelList' }
+        : { base: 'setAsrBaseUrl', key: 'setAsrKey', model: 'setAsrModel', list: 'asrModelList' };
+    const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    const baseUrl = val(ids.base);
+    if (!baseUrl) { alert('请先填写 API 地址'); return; }
+    const btn = document.querySelector(`#settingsModal .form-group:has(#${ids.model}) .btn-sm`);
+    if (btn) btn.textContent = '⏳ 获取中...';
+    try {
+        const resp = await apiFetch('/api/config/list-models', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base_url: baseUrl, api_key: val(ids.key) }),
+        });
+        const d = await resp.json().catch(() => ({}));
+        const dl = document.getElementById(ids.list);
+        if (dl) dl.innerHTML = '';
+        const models = d.models || [];
+        if (models.length) {
+            models.forEach(m => {
+                const o = document.createElement('option');
+                o.value = m;
+                if (dl) dl.appendChild(o);
+            });
+            alert(`✅ 获取到 ${models.length} 个模型，点击模型输入框可从列表选择（也可直接手输）`);
+        } else {
+            alert(`⚠️ 未能获取模型列表${d.error ? `：${d.error}` : ''}\n端点可能不支持 /models 接口，可手动输入模型名`);
+        }
+    } catch (err) {
+        alert(`❌ 获取失败：${err.message}`);
+    } finally {
+        if (btn) btn.textContent = '🔍 获取模型';
+    }
+}
+
 async function saveSettings() {
     // 访问令牌（本地）
     const token = document.getElementById('setToken').value.trim();

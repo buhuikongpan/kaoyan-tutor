@@ -153,15 +153,9 @@
                         <input type="text" id="setMainBaseUrl" placeholder="https://api.deepseek.com/v1">
                         <label>API Key（留空 = 保持已有 Key）</label>
                         <input type="password" id="setMainKey" placeholder="sk-...">
-                        <label>模型名称</label>
-                        <input type="text" id="setMainModel" list="mainModelList" placeholder="deepseek-v4-flash">
-                        <datalist id="mainModelList">
-                            <option value="deepseek-v4-flash"></option>
-                            <option value="deepseek-chat"></option>
-                            <option value="deepseek-reasoner"></option>
-                            <option value="glm-4.5"></option>
-                            <option value="qwen3-max"></option>
-                        </datalist>
+                        <label>模型名称 <button class="btn-sm" onclick="fetchModels('main')" title="从 API 拉取可用模型">🔍 获取模型</button></label>
+                        <input type="text" id="setMainModel" list="mainModelList" placeholder="可手输，或点「获取模型」自动拉取">
+                        <datalist id="mainModelList"></datalist>
                         <label class="checkbox-row"><input type="checkbox" id="setMainMultimodal"> 主模型支持多模态（可直接发图片，无需视觉辅助）</label>
                     </div>
                 </div>
@@ -174,14 +168,9 @@
                         <input type="text" id="setVisionBaseUrl" placeholder="https://open.bigmodel.cn/api/paas/v4">
                         <label>API Key（留空 = 保持已有 Key）</label>
                         <input type="password" id="setVisionKey" placeholder="...">
-                        <label>模型名称</label>
-                        <input type="text" id="setVisionModel" list="visionModelList" placeholder="glm-4v-flash">
-                        <datalist id="visionModelList">
-                            <option value="glm-4v-flash"></option>
-                            <option value="glm-4.6v-flash"></option>
-                            <option value="qwen-vl-plus"></option>
-                            <option value="qwen-vl-max"></option>
-                        </datalist>
+                        <label>模型名称 <button class="btn-sm" onclick="fetchModels('vision')" title="从 API 拉取可用模型">🔍 获取模型</button></label>
+                        <input type="text" id="setVisionModel" list="visionModelList" placeholder="可手输，或点「获取模型」自动拉取">
+                        <datalist id="visionModelList"></datalist>
                     </div>
                 </div>
 
@@ -192,12 +181,9 @@
                         <input type="text" id="setAsrBaseUrl" placeholder="https://dashscope.aliyuncs.com">
                         <label>API Key（留空 = 保持已有 Key）</label>
                         <input type="password" id="setAsrKey" placeholder="sk-...">
-                        <label>模型名称</label>
-                        <input type="text" id="setAsrModel" list="asrModelList" placeholder="qwen3-asr-flash">
-                        <datalist id="asrModelList">
-                            <option value="qwen3-asr-flash"></option>
-                            <option value="qwen2-audio-instruct"></option>
-                        </datalist>
+                        <label>模型名称 <button class="btn-sm" onclick="fetchModels('asr')" title="从 API 拉取可用模型">🔍 获取模型</button></label>
+                        <input type="text" id="setAsrModel" list="asrModelList" placeholder="可手输，或点「获取模型」自动拉取">
+                        <datalist id="asrModelList"></datalist>
                     </div>
                 </div>
 
@@ -233,7 +219,7 @@
     </div>
 
     <!-- 内联测试：验证 JS 是否能运行 -->
-    <script src="js/app.js?v=10"></script>
+    <script src="js/app.js?v=11"></script>
     <!-- KaTeX（本地化，不依赖 CDN，保证公式渲染稳定） -->
     <link rel="stylesheet" href="vendor/katex/katex.min.css">
     <script src="vendor/katex/katex.min.js" defer></script>

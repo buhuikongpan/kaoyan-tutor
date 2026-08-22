@@ -63,6 +63,36 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(load_model_config()["main"]["api_key"].startswith("new-secret-key"))
 
+    def test_list_models(self):
+        # 空地址 → 400
+        r = client.post("/api/config/list-models", json={"base_url": ""})
+        self.assertEqual(r.status_code, 400)
+
+        # mock OpenAI 兼容 /models 端点
+        import app.api.routes.config as cfg_mod
+        from httpx import MockTransport, Request, Response as HResponse
+
+        async def fake_models(request: Request) -> HResponse:
+            return HResponse(200, json={"data": [{"id": "deepseek-v4-flash"},
+                                                  {"id": "deepseek-reasoner"}]})
+
+        real_cls = cfg_mod.httpx.AsyncClient
+
+        class _Mock(real_cls):
+            def __init__(self, *args, **kwargs):
+                super().__init__(transport=MockTransport(fake_models), *args, **kwargs)
+
+        cfg_mod.httpx.AsyncClient = _Mock
+        try:
+            r = client.post("/api/config/list-models", json={
+                "base_url": "https://example.com/v1", "api_key": "sk-test",
+            })
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.json()["models"], ["deepseek-v4-flash", "deepseek-reasoner"])
+            self.assertEqual(r.json()["error"], "")
+        finally:
+            cfg_mod.httpx.AsyncClient = real_cls
+
 
 if __name__ == "__main__":
     unittest.main()
