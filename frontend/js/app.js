@@ -742,21 +742,42 @@ async function sendMessage() {
             throw new Error(detail);
         }
 
-        // ---- 解析 SSE 流，打字机式渲染 ----
+        // ---- 解析 SSE 流，打字机式渲染 + 思维链"深度思考中"展示 ----
         removeTyping(typingId); typingId = 0;
         streamingEl = document.createElement('div');
         streamingEl.className = 'message assistant';
-        streamingEl.innerHTML = `<div class="msg-content"></div><div class="msg-time"></div>`;
+        streamingEl.innerHTML = `
+            <div class="reasoning-block" style="display:none">
+                <div class="reasoning-header" onclick="toggleReasoning(this)"><span class="reasoning-arrow">▶</span><span class="reasoning-title">🧠 深度思考中...</span></div>
+                <div class="reasoning-body"></div>
+            </div>
+            <div class="msg-content"></div><div class="msg-time"></div>`;
         streamingContent = streamingEl.querySelector('.msg-content');
+        const reasoningBlock = streamingEl.querySelector('.reasoning-block');
+        const reasoningBody = streamingEl.querySelector('.reasoning-body');
+        const reasoningTitle = streamingEl.querySelector('.reasoning-title');
         document.getElementById('chatMessages').appendChild(streamingEl);
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
         let raw = '';
+        let reasoningText = '';
+        let reasoningStarted = false;
+        let contentStarted = false;
+        let reasoningLastRender = 0;
         let sseError = '';
         let done = false;
 
+        const renderReasoningThrottled = () => {
+            const now = Date.now();
+            if (now - reasoningLastRender > 50) {
+                reasoningBody.textContent = reasoningText;
+                reasoningBody.scrollTop = reasoningBody.scrollHeight;
+                reasoningLastRender = now;
+                scrollChat();
+            }
+        };
         const renderThrottled = () => {
             // 节流：高频 delta 不全量触发 KaTeX 重渲染，50ms 一次足够流畅
             const now = Date.now();
@@ -765,6 +786,13 @@ async function sendMessage() {
                 lastRender = now;
                 scrollChat();
             }
+        };
+        // 正文开始后：思考块收起为一行，可点击展开
+        const collapseReasoning = () => {
+            if (!reasoningStarted) return;
+            reasoningBlock.classList.add('collapsed');
+            reasoningTitle.textContent = '🧠 已深度思考（点击展开）';
+            streamingEl.querySelector('.reasoning-arrow').textContent = '▶';
         };
 
         while (true) {
@@ -781,7 +809,19 @@ async function sendMessage() {
                     if (!data) continue;
                     let obj;
                     try { obj = JSON.parse(data); } catch (e) { continue; }
-                    if (obj.type === 'delta' && obj.text) {
+                    if (obj.type === 'reasoning' && obj.text) {
+                        // 思维链实时展示（独立于正文，不混入回答）
+                        if (!reasoningStarted) {
+                            reasoningStarted = true;
+                            reasoningBlock.style.display = '';
+                        }
+                        reasoningText += obj.text;
+                        renderReasoningThrottled();
+                    } else if (obj.type === 'delta' && obj.text) {
+                        if (!contentStarted) {
+                            contentStarted = true;
+                            collapseReasoning();
+                        }
                         raw += obj.text;
                         renderThrottled();
                     } else if (obj.type === 'done') {
@@ -800,6 +840,12 @@ async function sendMessage() {
             streamingContent.innerHTML = renderMath(escHtml(raw));
             streamingEl.querySelector('.msg-time').textContent = time();
             scrollChat();
+        }
+        if (reasoningStarted && !sseError) {
+            // 最终落定思考块状态（正文未出现时也收起为"已思考"）
+            reasoningTitle.textContent = '🧠 已深度思考（点击展开）';
+            streamingEl.querySelector('.reasoning-arrow').textContent = '▶';
+            reasoningBlock.classList.add('collapsed');
         }
         if (sseError) {
             streamingEl.remove();
@@ -927,6 +973,17 @@ function addSystemMessage(text) {
         `<div class="message system"><div class="msg-content">${escHtml(text)}</div></div>`;
     scrollChat();
 }
+// 思维链块：点击标题行展开/折叠（流式与新历史消息共用）
+function toggleReasoning(headerEl) {
+    const block = headerEl.closest('.reasoning-block');
+    if (!block) return;
+    const collapsed = block.classList.toggle('collapsed');
+    headerEl.querySelector('.reasoning-arrow').textContent = collapsed ? '▶' : '▼';
+    if (!collapsed) {
+        const body = block.querySelector('.reasoning-body');
+        if (body) body.scrollTop = body.scrollHeight;
+    }
+}
 let typingCount=0;
 function showTyping() { const id=++typingCount;
     document.getElementById('chatMessages').innerHTML += `<div class="message assistant" id="typing-${id}"><div class="msg-content"><div class="typing-indicator"><span></span><span></span><span></span></div></div></div>`;
@@ -1052,7 +1109,11 @@ async function selectConversation(convId) {
             if (msg.role === 'user') {
                 html += `<div class="message user"><div class="msg-content">${escHtml(msg.content)}</div><div class="msg-time">${time()}</div></div>`;
             } else if (msg.role === 'assistant') {
-                html += `<div class="message assistant"><div class="msg-content">${renderMath(escHtml(msg.content))}</div><div class="msg-time">${time()}</div></div>`;
+                // 历史消息带思维链时显示折叠的思考块（点击可展开）
+                const rBlock = (msg.reasoning && msg.reasoning.trim())
+                    ? `<div class="reasoning-block collapsed"><div class="reasoning-header" onclick="toggleReasoning(this)"><span class="reasoning-arrow">▶</span><span class="reasoning-title">🧠 已深度思考（点击展开）</span></div><div class="reasoning-body">${escHtml(msg.reasoning)}</div></div>`
+                    : '';
+                html += `<div class="message assistant">${rBlock}<div class="msg-content">${renderMath(escHtml(msg.content))}</div><div class="msg-time">${time()}</div></div>`;
             }
         }
         if (!d.messages.length) html += '<div class="message system"><div class="msg-content">（空对话）</div></div>';

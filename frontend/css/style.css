@@ -567,6 +567,40 @@ video::cue(b) {
     font-size: 12px;
     border-radius: 6px;
 }
+/* 思维链展示块（"深度思考中"，独立于正文，可折叠） */
+.reasoning-block {
+    background: #f2f4f8;
+    border-left: 3px solid #b8c4d9;
+    border-radius: 4px 8px 8px 4px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    max-width: 100%;
+}
+.reasoning-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    color: #5a6b85;
+    user-select: none;
+    font-size: 12px;
+}
+.reasoning-header:hover { color: #3d5278; }
+.reasoning-arrow { font-size: 9px; color: #91a0b8; }
+.reasoning-body {
+    padding: 0 10px 8px 24px;
+    max-height: 180px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #6b7688;
+    line-height: 1.65;
+    border-top: 1px dashed #dfe5ef;
+    margin-top: 2px;
+    padding-top: 6px;
+}
+.reasoning-block.collapsed .reasoning-body { display: none; }
 .chat-img {
     max-width: 200px;
     max-height: 150px;

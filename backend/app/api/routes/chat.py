@@ -182,11 +182,12 @@ def get_history(conv_id: str, db: Session = Depends(get_db)):
             content = parsed
         except Exception:
             pass
+        base = {"role": m.role, "reasoning": m.reasoning or ""}
         if isinstance(content, list):  # 含图片的 user 消息
             texts = [p.get("text", "") for p in content if isinstance(p, dict)]
-            items.append({"role": m.role, "content": "\n".join(texts), "has_image": True})
+            items.append({**base, "content": "\n".join(texts), "has_image": True})
         else:
-            items.append({"role": m.role, "content": content or "", "has_image": False})
+            items.append({**base, "content": content or "", "has_image": False})
     return {
         "conversation_id": conv_id,
         "name": sess.name if sess else DEFAULT_NAME,
@@ -215,9 +216,10 @@ async def send_message_stream(
     """发送消息（可选图片），SSE 流式返回 AI 回答。
 
     事件序列：
-      data: {"type":"delta","text":"正文片段"}   （可多次）
-      data: {"type":"done","conversation_id":...}  （正常结束）
-      data: {"type":"error","detail":"..."}        （出错时替代 done）
+      data: {"type":"reasoning","text":"思维链片段"} （可多次，正文前或与正文交替）
+      data: {"type":"delta","text":"正文片段"}       （可多次）
+      data: {"type":"done","conversation_id":...}    （正常结束）
+      data: {"type":"error","detail":"..."}          （出错时替代 done）
     """
     if subject not in SUBJECT_NAMES:
         raise HTTPException(400, f"不支持的科目: {subject}")
@@ -303,6 +305,8 @@ async def send_message_stream(
             ):
                 if kind == "reasoning":
                     reasoning_acc.append(text)
+                    # 思维链实时推给前端做"深度思考中"展示（独立于正文，不混入回答）
+                    yield _sse({"type": "reasoning", "text": text})
                 else:
                     content_acc.append(text)
                     yield _sse({"type": "delta", "text": text})

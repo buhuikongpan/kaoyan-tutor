@@ -108,11 +108,15 @@ class StreamTest(unittest.TestCase):
     def test_stream_events_and_persistence(self):
         events = self._read_sse()
         deltas = [e["text"] for e in events if e.get("type") == "delta"]
+        reasonings = [e["text"] for e in events if e.get("type") == "reasoning"]
         done = [e for e in events if e.get("type") == "done"]
         errs = [e for e in events if e.get("type") == "error"]
 
         self.assertFalse(errs, f"出现 error 事件: {errs}")
         self.assertTrue(deltas, "没有收到 delta 事件")
+        # 思维链在 SSE 中独立推送（前端做"深度思考中"展示）
+        self.assertTrue(reasonings, "没有收到 reasoning 事件")
+        self.assertIn("内部思考", "".join(reasonings))
         # δ 事件为原始文本（前端 renderMath 兜底 \\(...\\)）；落库时已归一化
         self.assertEqual("".join(deltas), "你好，流式测试。公式 $$\\int x\\,dx$$ 违规公式 \\(x^2\\) 应归一化")
         self.assertEqual(len(done), 1)
@@ -132,6 +136,12 @@ class StreamTest(unittest.TestCase):
             self.assertIn("内部思考中", msgs[-1].reasoning)  # reasoning 落库但不进正文
             sess = db.query(ChatSession).filter(ChatSession.conv_id == TEST_CONV).first()
             self.assertEqual(sess.name, "测试流式")  # 首条提问自动命名
+
+            # 历史接口回传 reasoning（前端历史消息渲染可展开的思考块）
+            h = client.get(f"/api/chat/{TEST_CONV}/history")
+            self.assertEqual(h.status_code, 200)
+            last_hist = h.json()["messages"][-1]
+            self.assertIn("内部思考", last_hist.get("reasoning", ""))
         finally:
             db.close()
 
