@@ -47,9 +47,22 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 1. **上传视频**：选择科目 → 上传 MP4 → 自动提取字幕（千问 ASR，几分钟）
 2. **学习**：选视频播放 → 切换 Agent：
    - **A 即时问答**：边看边问（自动带**整讲字幕全文 + 当前播放位置**，agent 完整知道你学到哪），可发图片（草稿/笔记截图）
-   - **B 引导输出**：让 AI 出题/追问，答错给提示
+   - **B 引导输出**：让 AI 出题/追问，答错给提示（勾选视频后，优先用**课程总结**，更结构化）
    - **C 课后问答**：自由提问
 3. **字幕文件**：自动存 `storage/subtitles/`，可点 📄 下载
+
+## 课程总结（自动生成）
+
+字幕提取完成后，后端自动为每节课生成一份**结构化课程总结**（分段提取 → 合并防漏，保信息密度）：
+
+- 内容五段式：**知识点（带时间戳）/ 核心公式 / 例题与题型 / 方法技巧 / 易错点**
+- 视频树中 `📄` 可查看/下载 markdown；失败显示 `📄重试`（手动触发重新生成）
+- 模式 B 引导输出优先使用勾选视频的总结（高密度、跨多节不撑爆上下文）；
+  尚无总结的视频自动回退字幕全文
+- 一份总结仅 1~2 千 token，是全文的 1/10，适合作为长期学习画像
+
+> 模型上下文为 1M token：单节全文（约 1.5 万 token）与多节总结都毫无压力，
+> 截断阈值仅作极端防御。
 
 ---
 
@@ -95,7 +108,7 @@ DIFY考研学习平台/
 │   ├── css/  js/  vendor/
 ├── scripts/start.bat          # 一键启动
 ├── docs/                      # 项目文档（Agent 提示词、备忘）
-├── storage/                   # 视频/字幕（运行时数据）
+├── storage/                   # 运行时数据：videos/（视频）subtitles/（字幕）summaries/（课程总结）
 ├── data/                      # SQLite + 日志（运行时数据）
 ├── .env / .env.example        # API Key + PLATFORM_TOKEN 配置
 ├── .gitignore
@@ -106,12 +119,15 @@ DIFY考研学习平台/
 
 ```bash
 cd backend
-python -m unittest tests.test_smoke tests.test_stream_mock -v
+python -m unittest discover -s tests -v
 ```
 
 - `test_smoke`：基础路由与参数校验
-- `test_stream_mock`：用 httpx.MockTransport 内存模拟 DeepSeek 的 SSE 响应，
-  验证流式事件序列与落库逻辑（**不访问外网，不消耗 API 配额**）
+- `test_stream_mock`：MockTransport 内存模拟 DeepSeek 的 SSE 响应，验证流式事件序列与落库
+- `test_summary`：MockTransport 模拟「分段提取 → 合并」两轮调用，验证课程总结生成与状态流转
+
+全部测试**不访问外网、不消耗 API 配额**；各 mock 模块通过 setUpModule/tearDownModule
+隔离全局替换，可同进程并行。
 
 ---
 

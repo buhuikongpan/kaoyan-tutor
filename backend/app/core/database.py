@@ -18,15 +18,20 @@ def init_db():
 
 
 def _migrate():
-    """老库增量迁移：给 chat_sessions 补 name 列（若已存在则跳过）"""
+    """老库增量迁移（缺列则补，已存在则跳过）"""
     import sqlalchemy as sa
     insp = sa.inspect(engine)
-    tables = insp.get_table_names()
-    if "chat_sessions" in tables:
-        cols = {c["name"] for c in insp.get_columns("chat_sessions")}
-        if "name" not in cols:
+    tables = set(insp.get_table_names())
+
+    def add_column(table: str, col: str, ddl: str):
+        if table in tables and col not in {c["name"] for c in insp.get_columns(table)}:
             with engine.begin() as conn:
-                conn.execute(sa.text("ALTER TABLE chat_sessions ADD COLUMN name TEXT"))
-            print("[migrate] chat_sessions 已添加 name 列")
+                conn.execute(sa.text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+            print(f"[migrate] {table} 已添加 {col} 列")
+
+    # 历史版本逐个补列
+    add_column("chat_sessions", "name", "TEXT")
+    add_column("videos", "summary_status", "VARCHAR(20) DEFAULT 'none'")
+    add_column("videos", "summary_path", "VARCHAR(500) DEFAULT ''")
     if "chat_messages" not in tables:
         print("[migrate] 将创建 chat_messages 表")

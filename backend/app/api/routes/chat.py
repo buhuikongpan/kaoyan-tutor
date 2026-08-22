@@ -4,7 +4,9 @@
 """
 import json
 import base64
+import os
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Depends
 from fastapi.responses import StreamingResponse
@@ -12,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ...services.llm_service import chat_completion_stream, vision_analyze
-from ...models import Subtitle, ChatSession, ChatMessage
+from ...models import Video, Subtitle, ChatSession, ChatMessage
 from ..deps import get_db
 
 router = APIRouter(prefix="/api/chat", tags=["聊天"])
@@ -22,9 +24,9 @@ MODE_NAMES = {"A": "即时问答", "B": "引导输出", "C": "课后问答"}
 DEFAULT_NAME = "新对话"
 MAX_HISTORY = 40           # 回填给模型的历史消息上限（条）
 MAX_REASONING_ROUNDS = 2   # 思维链只回填最近 N 轮 assistant（防 token 膨胀）
-# 模式B 视频字幕上限：单节视频字幕约 1~1.5 万 token，勾选 3 节长课约 4~5 万 token，
-# 60k 字符容量足够容纳；截断仅防御极端累积（如勾选超长课程/多视频），正常不触发
-MAX_SUBTITLE_CHARS = 60000
+# 模式B 字幕上限：模型上下文为 1M token，10 节长课全文（约 15 万字符 ≈ 20 万 token）
+# 也只是总量的 2%，此上限纯属防御极端堆积（历史消息 + 思维链叠加），正常不触发
+MAX_SUBTITLE_CHARS = 400000
 
 
 # ---------- DB 读写辅助（统一走调用方传入的 Session） ----------
@@ -251,20 +253,31 @@ async def send_message_stream(
     _append_message(db, conv_id, subject, mode, "user", user_content)
     history.append({"role": "user", "content": user_content})
 
-    # 模式B：查已看视频的字幕作为上下文（超长裁剪，防 token 爆表）
+    # 模式B：勾选视频的上下文——优先用「课程总结」（高密度、跨多节不爆上下文），
+    # 没有总结的视频回退字幕全文；总量仍由 _truncate 兜底（1M 上下文下基本不触发）
     if mode == 'B' and wids:
-        subs = db.query(Subtitle).filter(Subtitle.video_id.in_(wids),
-                                         Subtitle.subject == subject)\
-            .order_by(Subtitle.video_id, Subtitle.seq).all()
-        if subs:
+        videos = db.query(Video).filter(
+            Video.id.in_(wids), Video.subject == subject).all()
+        if videos:
             parts = []
-            cur_vid = None
-            for s in subs:
-                if s.video_id != cur_vid:
-                    cur_vid = s.video_id
-                    parts.append(f'\n--- 视频 {s.video_id} ---')
-                parts.append(s.text)
-            subtitle_context = _truncate('\n'.join(parts))
+            for v in videos:
+                header = f'\n--- 视频 {v.id}: {v.title or v.filename} ---'
+                summary = ""
+                if v.summary_status == "done" and v.summary_path and os.path.exists(v.summary_path):
+                    try:
+                        summary = Path(v.summary_path).read_text(encoding="utf-8")
+                    except Exception:
+                        summary = ""
+                if summary.strip():
+                    parts.append(f"{header}（课程总结）\n{summary.strip()}")
+                else:
+                    subs = db.query(Subtitle).filter(Subtitle.video_id == v.id)\
+                        .order_by(Subtitle.seq).all()
+                    if subs:
+                        parts.append(f"{header}（无总结，附字幕全文）\n"
+                                     + "\n".join(s.text for s in subs if s.text))
+            if parts:
+                subtitle_context = _truncate('\n'.join(parts))
 
     async def event_gen():
         reasoning_acc = []

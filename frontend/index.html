@@ -171,8 +171,22 @@
         </div>
     </div>
 
+    <!-- 课程总结弹窗 -->
+    <div class="modal-overlay" id="summaryModal" style="display:none" onclick="if(event.target===this) closeSummary()">
+        <div class="modal-content" style="max-width:780px">
+            <div class="modal-header">
+                <h2>📄 课程总结</h2>
+                <button class="btn-close" onclick="closeSummary()">✕</button>
+            </div>
+            <div id="summaryBody" style="max-height:65vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.8;padding:14px 16px;background:#f7f8fa;border-radius:6px;margin:6px 0"></div>
+            <div style="text-align:right">
+                <button class="btn-primary" id="summaryDownload">⬇️ 下载 .md</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 内联测试：验证 JS 是否能运行 -->
-    <script src="js/app.js?v=6"></script>
+    <script src="js/app.js?v=7"></script>
     <!-- KaTeX（本地化，不依赖 CDN，保证公式渲染稳定） -->
     <link rel="stylesheet" href="vendor/katex/katex.min.css">
     <script src="vendor/katex/katex.min.js" defer></script>

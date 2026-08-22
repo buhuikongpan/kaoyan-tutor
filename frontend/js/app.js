@@ -183,6 +183,11 @@ async function loadTree() {
             }
             container.appendChild(ucDiv);
         }
+        // 若存在生成中的课程总结，20 秒后自动刷新一次树状态（后台任务完成时能跟上）
+        if (container.querySelector('.status-summary-processing')) {
+            clearTimeout(window._summaryPollTimer);
+            window._summaryPollTimer = setTimeout(() => loadTree(), 20000);
+        }
     } catch (err) {
         container.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><div>${err.message}</div></div>`;
     }
@@ -220,6 +225,13 @@ function makeVideoNode(v, depth = 0) {
     item.className = `tree-video${v.id === state.currentVideoId ? ' active' : ''}`;
     item.dataset.videoId = v.id;
     const labels = { pending: '待处理', processing: '提取中', done: '已识别', failed: '失败' };
+    // 课程总结状态：📄 点击查看 / 生成中 / 失败可重试（无总结不显示）
+    const sLabels = { done: '📄', processing: '⏳总结', failed: '📄重试', none: '', pending: '' };
+    const sTitle = {
+        done: '查看课程总结', processing: '总结生成中', failed: '重新生成总结', none: '', pending: '',
+    };
+    const sAction = v.summary_status === 'done' ? `viewSummary(${v.id})`
+        : v.summary_status === 'failed' ? `generateSummary(${v.id})` : '';
     const checked = (state.mode === 'B' && sessionStorage.getItem('b_video_'+v.id) === '1') ? 'checked' : '';
     item.innerHTML = `<div class="tree-video-label" style="padding-left:${depth*16+4}px">
         <input type="checkbox" class="b-video-cb" data-video="${v.id}" ${checked} style="display:none" onchange="onBCheckChange(${v.id}, this)">
@@ -227,6 +239,8 @@ function makeVideoNode(v, depth = 0) {
         <span class="tree-vname" onclick="playVideo(${v.id})">${escHtml(v.title || v.filename)}</span>
         <span class="tree-vmeta">${formatSize(v.file_size)}</span>
         <span class="tree-vstatus status-${v.subtitle_status}">${labels[v.subtitle_status] || ''}</span>
+        <span class="tree-sum status-summary-${v.summary_status}" ${sAction ? `onclick="event.stopPropagation();${sAction}"` : ''}
+              title="${sTitle[v.summary_status] || ''}">${sLabels[v.summary_status] || ''}</span>
         <span class="tree-ctx" onclick="event.stopPropagation();moveVideoDialog(${v.id})" title="移动到...">📂</span>
         <span class="tree-ctx" onclick="event.stopPropagation();extractSubtitle(${v.id})" title="重新提取字幕">🔄</span>
         <span class="tree-ctx" onclick="event.stopPropagation();deleteVideo(${v.id})" title="删除">🗑️</span>
@@ -619,6 +633,50 @@ async function deleteVideo(videoId) {
         if (state.currentVideoId === videoId) resetPlayer();
         loadTree();
     } catch (err) { addSystemMessage(`⚠️ ${err.message}`); }
+}
+
+// ===== 课程总结（查看 / 手动生成重试）=====
+async function viewSummary(videoId) {
+    try {
+        const resp = await apiFetch(`/api/videos/${videoId}/summary`);
+        const d = await resp.json().catch(() => ({}));
+        if (!resp.ok || d.status !== 'done' || !d.content) {
+            addSystemMessage('ℹ️ 总结尚未生成（字幕完成后自动生成）');
+            return;
+        }
+        document.getElementById('summaryBody').textContent = d.content;
+        const dl = document.getElementById('summaryDownload');
+        dl.onclick = () => {
+            const blob = new Blob([d.content], { type: 'text/markdown;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            const nameEl = document.querySelector(`.tree-video[data-video-id="${videoId}"] .tree-vname`);
+            a.download = `${(nameEl ? nameEl.textContent.trim() : `video_${videoId}`)}-课程总结.md`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        };
+        document.getElementById('summaryModal').style.display = 'flex';
+    } catch (err) { addSystemMessage(`⚠️ ${err.message}`); }
+}
+
+function closeSummary() {
+    const m = document.getElementById('summaryModal');
+    if (m) m.style.display = 'none';
+}
+
+async function generateSummary(videoId) {
+    addSystemMessage('📄 正在生成课程总结（分段提取，约需 10~60 秒）...');
+    try {
+        const resp = await apiFetch(`/api/videos/${videoId}/generate-summary`, { method: 'POST' });
+        const d = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            addSystemMessage(`⚠️ 总结生成失败：${d.detail || resp.status}`);
+            loadTree();
+            return;
+        }
+        addSystemMessage('✅ 课程总结生成完成，点 📄 查看');
+        loadTree();
+    } catch (err) { addSystemMessage(`⚠️ ${err.message}`); loadTree(); }
 }
 
 // ===== 聊天 =====

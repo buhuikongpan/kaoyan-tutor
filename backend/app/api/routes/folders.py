@@ -39,6 +39,7 @@ def get_folder_tree(subject: str = Query(""), db: Session = Depends(get_db)):
             "duration": v.duration,
             "sort_order": v.sort_order,
             "subtitle_status": v.subtitle_status,
+            "summary_status": v.summary_status,
         }
         if v.folder_id and v.folder_id in folder_map:
             folder_map[v.folder_id]["videos"].append(vinfo)

@@ -149,6 +149,96 @@ async def chat_completion_stream(
                     yield "content", c
 
 
+# ===== 课程总结生成（分段提取 → 合并去重，保证信息密度）=====
+# 策略：整讲字幕按时间分段，每段单独"逐句扫描"提取（模型注意力集中在小段上，
+# 不因长文稀释细节）；全部段结果再合并，并要求对照各段检查遗漏。相比一次性
+# 压缩全文，分段提取 + 合并防漏能最大程度保住公式/例题/易错点等关键信息。
+
+SEGMENT_EXTRACT_PROMPT = """你是考研课程内容提取器。下面是某考研课第 {n}/{total} 段的带时间戳字幕（[mm:ss] 为该句起始时间）。
+
+任务：逐句扫描，提取这一段里出现的全部有效信息，宁多勿漏：
+1. 知识点/概念：名称 + 一句话解释 + 时间戳（如 [12:34]）
+2. 公式：完整 LaTeX 公式（$...$ / $$...$$），一个都别漏
+3. 例题：题干 + 解题关键步骤（简短）+ 时间戳
+4. 方法/技巧/口诀
+5. 易错点/老师强调的警告
+只输出提取结果，不要客套话；某类内容不存在就省略该类。若一段字幕没有任何有效内容，输出「（无有效内容）」。"""
+
+SUMMARIZE_MERGE_PROMPT = """下面是同一节考研课《{title}》按时间分段提取的 {k} 份要点。
+
+请对照全部要点，合并去重，生成一份结构化的考研复习总结，要求：
+1. 按五段组织：## 知识点 / ## 核心公式 / ## 例题与题型 / ## 方法技巧 / ## 易错点
+2. 合并前逐份检查一遍：任何公式、例题、知识点都不得遗漏（宁可多列）
+3. 同一概念出现在多段的合并为一条，时间戳取首次出现
+4. 公式一律用 $...$ 或 $$...$$ LaTeX，中文讲解
+5. 直接输出 markdown，不要额外说明。
+
+{parts}"""
+
+
+def _simple_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {settings.deepseek_api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+async def chat_completion_simple(
+    messages: list,
+    max_tokens: int = 4096,
+    temperature: float = 0.3,
+) -> str:
+    """普通（非流式、非 thinking）调用 DeepSeek，用于总结生成等批量任务。
+
+    比流式聊天快得多（不开思维链），返回纯文本。
+    """
+    payload = {
+        "model": "deepseek-v4-flash",
+        "messages": messages,
+        "thinking": {"type": "disabled"},  # 总结/提取不需要思考，快且省
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    async with httpx.AsyncClient(timeout=STREAM_TIMEOUT) as client:
+        resp = await client.post(DEEPSEEK_API, json=payload, headers=_simple_headers())
+        if resp.status_code != 200:
+            raise RuntimeError(f"DeepSeek API {resp.status_code}: {resp.text[:800]}")
+        result = resp.json()
+        return result.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+
+
+async def summarize_lecture(title: str, segments: list) -> str:
+    """分段提取 → 合并防漏，生成整讲 markdown 总结。
+
+    segments: 带时间戳的字幕片段列表（每段约 20 分钟内容）。
+    """
+    if not segments:
+        raise ValueError("没有可总结的字幕内容")
+
+    # 第一轮：逐段提取
+    part_results = []
+    for i, seg in enumerate(segments, 1):
+        prompt = SEGMENT_EXTRACT_PROMPT.format(n=i, total=len(segments), subtitle=seg)
+        out = await chat_completion_simple(
+            [{"role": "user", "content": prompt}],
+            max_tokens=2048, temperature=0.2,
+        )
+        part_results.append(out)
+
+    # 第二轮：合并去重 + 遗漏检查
+    parts_body = "\n\n".join(
+        f"=== 分段 {i} ===\n{t}" for i, t in enumerate(part_results, 1)
+    )
+    merge_prompt = SUMMARIZE_MERGE_PROMPT.format(
+        title=title, k=len(part_results), parts=parts_body,
+    )
+    return await chat_completion_simple(
+        [{"role": "user", "content": merge_prompt}],
+        max_tokens=4096, temperature=0.3,
+    )
+
+
 async def vision_analyze(
     image_base64: str,
     question: str = "请详细描述这张图片中的内容",

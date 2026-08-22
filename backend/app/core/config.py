@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     storage_dir: str = str(BASE_DIR / "storage")
     video_dir: str = str(BASE_DIR / "storage" / "videos")
     subtitle_dir: str = str(BASE_DIR / "storage" / "subtitles")
+    summary_dir: str = str(BASE_DIR / "storage" / "summaries")  # 课程总结 markdown
 
     # 数据库（SQLite 放在项目 data 目录）
     database_url: str = f"sqlite:///{BASE_DIR / 'data' / 'kaoyan.db'}"

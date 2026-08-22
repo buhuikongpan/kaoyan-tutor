@@ -166,6 +166,12 @@ html, body {
 .tree-fname { font-weight: 600; color: #333; }
 .tree-count, .tree-vmeta { font-size: 11px; color: #999; margin-left: 4px; flex-shrink: 0; }
 .tree-vstatus { font-size: 10px; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
+/* 课程总结标签：有状态时可点击（查看/重试），生成中显示等待态 */
+.tree-sum { font-size: 10px; padding: 1px 3px; border-radius: 3px; flex-shrink: 0; margin-left: 2px; }
+.tree-sum.status-summary-done { cursor: pointer; opacity: 0.7; }
+.tree-sum.status-summary-done:hover { opacity: 1; background: #eef3fd; }
+.tree-sum.status-summary-failed { cursor: pointer; color: #c0392b; }
+.tree-sum.status-summary-processing { color: #e67e22; }
 .tree-ctx {
     font-size: 11px; padding: 1px 4px; border-radius: 3px; flex-shrink: 0;
     opacity: 0.5; cursor: pointer;

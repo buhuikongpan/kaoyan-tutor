@@ -70,14 +70,18 @@ app.include_router(folders.router)
 # 初始化数据库
 init_db()
 
-# 启动时重置卡住的字幕提取状态
+# 启动时重置卡住的任务状态（字幕提取 / 课程总结生成）
 try:
     s = SessionLocal()
     stuck = s.query(Video).filter(Video.subtitle_status == "processing").all()
     for v in stuck:
         v.subtitle_status = "pending"
         print(f"  [i] 重置卡住的视频 #{v.id}: {v.title}")
-    if stuck:
+    stuck_sum = s.query(Video).filter(Video.summary_status == "processing").all()
+    for v in stuck_sum:
+        v.summary_status = "none"  # 重新触发（摘要生成是幂等的）
+        print(f"  [i] 重置卡住的总结 #{v.id}: {v.title}")
+    if stuck or stuck_sum:
         s.commit()
     s.close()
 except Exception:
@@ -86,6 +90,7 @@ except Exception:
 # 创建存储目录
 os.makedirs(settings.video_dir, exist_ok=True)
 os.makedirs(settings.subtitle_dir, exist_ok=True)
+os.makedirs(settings.summary_dir, exist_ok=True)
 os.makedirs(settings.data_dir, exist_ok=True)
 
 # 前端静态文件

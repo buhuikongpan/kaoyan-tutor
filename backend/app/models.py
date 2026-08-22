@@ -32,6 +32,8 @@ class Video(Base):
     folder_id = Column(Integer, default=0, index=True)  # 0 = 未分类
     subtitle_path = Column(String(500), default="")
     subtitle_status = Column(String(20), default="pending")
+    summary_path = Column(String(500), default="")    # 课程总结 markdown 文件
+    summary_status = Column(String(20), default="none")  # none / pending / processing / done / failed
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 

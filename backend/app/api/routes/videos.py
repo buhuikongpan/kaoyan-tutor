@@ -12,17 +12,48 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ...core.config import settings
+from ...core.database import SessionLocal
 from ...models import Video, Subtitle
 from ..deps import get_db
 from ...services.asr_service import transcribe_audio
+from ...services.llm_service import summarize_lecture
 
 
 router = APIRouter(prefix="/api/videos", tags=["视频管理"])
 
 # 全局串行锁：同一时刻只允许一个视频在执行字幕提取（ASR），避免并发触发云接口限流
 _extract_lock = asyncio.Lock()
+# 课程总结生成同样串行（分段提取 + 合并要调多次 LLM，防并发限流）
+_summary_lock = asyncio.Lock()
 
 SUBJECTS = {"math": "数学", "english": "英语", "politics": "政治"}
+
+SEGMENT_SEC = 1200  # 总结分段：20 分钟一段
+
+
+def _fmt_ts(sec: float) -> str:
+    m, s = int(sec // 60), int(sec % 60)
+    return f"{m:02d}:{s:02d}"
+
+
+def _split_subtitle_segments(subs) -> list:
+    """把 (start_time, text) 字幕按 20 分钟聚合成带时间戳的文本段
+
+    分段提取是保证总结信息密度的关键：模型逐段扫描小段文本，
+    不会像一次性压缩全文那样稀释细节。
+    """
+    segments, cur, cur_start = [], [], None
+    for s in subs:
+        if cur_start is None or s.start_time - cur_start >= SEGMENT_SEC:
+            if cur:
+                segments.append("".join(cur))
+            cur = [f"[{_fmt_ts(s.start_time)}] {s.text}"]
+            cur_start = s.start_time
+        else:
+            cur.append(f"[{_fmt_ts(s.start_time)}] {s.text}")
+    if cur:
+        segments.append("".join(cur))
+    return segments
 
 
 def _get_video_duration(file_path: str) -> float:
@@ -203,6 +234,7 @@ def list_videos(
                 "duration": v.duration,
                 "sort_order": v.sort_order,
                 "subtitle_status": v.subtitle_status,
+                "summary_status": v.summary_status,
                 "created_at": v.created_at.isoformat() if v.created_at else None,
             }
             for v in videos
@@ -443,6 +475,9 @@ async def _extract_subtitle_impl(video_id: int, db: Session):
         video.subtitle_status = "done"
         db.commit()
 
+        # 字幕完成 → 后台自动生成课程总结（不阻塞本请求，串行排队防限流）
+        asyncio.create_task(_auto_generate_summary(video_id))
+
         return {"status": "done", "message": "字幕提取完成"}
 
     except HTTPException:
@@ -468,6 +503,86 @@ def download_subtitle_file(video_id: int, db: Session = Depends(get_db)):
         media_type="text/plain",
         filename=f"{video.subject}_{video.title}_字幕.txt",
     )
+
+
+# ===== 课程总结（字幕完成后自动生成，可手动重试）=====
+async def _generate_summary_impl(video_id: int, db: Session) -> dict:
+    """实际生成总结：分段提取 → 合并防漏 → 写 markdown 文件。
+
+    调用方需保证对同一视频串行（外层持 _summary_lock）。
+    """
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(404, "视频不存在")
+    if video.subtitle_status != "done":
+        raise HTTPException(400, "请先提取字幕")
+    subs = db.query(Subtitle).filter(Subtitle.video_id == video_id)\
+        .order_by(Subtitle.seq).all()
+    if not subs:
+        raise HTTPException(400, "无字幕内容")
+
+    video.summary_status = "processing"
+    db.commit()
+    try:
+        segments = _split_subtitle_segments(subs)
+        summary = await summarize_lecture(video.title or video.filename, segments)
+        if not summary.strip():
+            raise RuntimeError("总结内容为空")
+        sub_file = Path(settings.summary_dir) / f"{video_id}.md"
+        sub_file.parent.mkdir(parents=True, exist_ok=True)
+        sub_file.write_text(summary, encoding="utf-8")
+        video.summary_path = str(sub_file)
+        video.summary_status = "done"
+        db.commit()
+        return {"status": "done", "message": "总结生成完成", "summary": summary}
+    except HTTPException:
+        raise
+    except Exception as e:
+        video.summary_status = "failed"
+        db.commit()
+        raise HTTPException(500, f"总结生成失败: {str(e)}")
+
+
+async def _auto_generate_summary(video_id: int):
+    """字幕提取完成后的后台任务：串行排队生成总结，失败静默（可手动重试）"""
+    try:
+        async with _summary_lock:
+            db = SessionLocal()
+            try:
+                video = db.query(Video).filter(Video.id == video_id).first()
+                if video and video.subtitle_status == "done" \
+                        and video.summary_status in ("none", "pending", "failed"):
+                    await _generate_summary_impl(video_id, db)
+            finally:
+                db.close()
+    except Exception as e:
+        print(f"  [i] 后台总结生成失败 #{video_id}: {e}")
+
+
+@router.post("/{video_id}/generate-summary")
+async def generate_summary(video_id: int, db: Session = Depends(get_db)):
+    """手动生成/重试课程总结（同步执行，等待结果返回）"""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(404, "视频不存在")
+    async with _summary_lock:
+        cur = db.query(Video).filter(Video.id == video_id).first()
+        if cur and cur.summary_status == "processing":
+            raise HTTPException(400, "总结生成中，请稍候")
+        return await _generate_summary_impl(video_id, db)
+
+
+@router.get("/{video_id}/summary")
+def get_summary(video_id: int, db: Session = Depends(get_db)):
+    """读取课程总结（无则返回当前状态）"""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(404, "视频不存在")
+    if video.summary_status == "done" and video.summary_path \
+            and os.path.exists(video.summary_path):
+        content = Path(video.summary_path).read_text(encoding="utf-8")
+        return {"status": "done", "content": content}
+    return {"status": video.summary_status or "none", "content": ""}
 
 
 @router.put("/reorder")

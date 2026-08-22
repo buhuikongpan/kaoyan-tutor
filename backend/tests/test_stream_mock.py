@@ -45,7 +45,15 @@ class _MockAsyncClient(_real_async_client):
         super().__init__(transport=MockTransport(fake_deepseek), *args, **kwargs)
 
 
-llm.httpx.AsyncClient = _MockAsyncClient
+def setUpModule():
+    """本模块测试前替换全局 AsyncClient 为流式 mock（运行期替换，与其他测试文件隔离）"""
+    llm.httpx.AsyncClient = _MockAsyncClient
+
+
+def tearDownModule():
+    """本模块测试结束后恢复真实 AsyncClient"""
+    llm.httpx.AsyncClient = _real_async_client
+
 
 from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
