@@ -14,6 +14,7 @@ html, body {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    height: 100dvh;   /* 移动端：排除地址栏的动态视口高度（不支持时回落 vh） */
 }
 
 /* ===== 顶部导航 ===== */
@@ -106,6 +107,9 @@ html, body {
 .video-sidebar {
     width: 260px;
     min-width: 80px;
+    height: 100%;          /* 硬约束：与父级等高 */
+    min-height: 0;
+    overflow: hidden;
     background: white;
     border-right: 1px solid #e8e8e8;
     display: flex;
@@ -256,6 +260,9 @@ html, body {
     padding: 8px;
     gap: 6px;
     min-width: 160px;
+    min-height: 0;       /* 允许收缩，不被聊天区内容挤压 */
+    height: 100%;        /* 硬约束：与父级等高 */
+    overflow: hidden;
 }
 .video-player-wrapper {
     background: #000;
@@ -401,6 +408,8 @@ video::cue(b) {
     width: 340px;
     min-width: 120px;
     min-height: 0;       /* flex 子项能正确收缩，不挤压视频区 */
+    height: 100%;        /* 硬约束：面板高度锁定为父级高度，内容不再撑开布局 */
+    overflow: hidden;    /* 内部各滚动区各自滚动 */
     background: white;
     border-left: 1px solid #e8e8e8;
     display: flex;
@@ -516,7 +525,9 @@ video::cue(b) {
 .conv-op:hover { background: #ddd; }
 .conv-empty { font-size: 12px; color: #999; padding: 8px 4px; text-align: center; }
 .chat-messages {
-    flex: 1;
+    flex: 1 1 auto;
+    height: 0;             /* 硬约束：高度完全由 flex 分配，内容超高必然内部滚动，绝不撑开父级 */
+    min-height: 0;
     overflow-y: auto;
     overflow-anchor: none;   /* 消息区内部也不参与滚动锚定 */
     padding: 12px;
@@ -528,6 +539,7 @@ video::cue(b) {
     display: flex;
     flex-direction: column;
     max-width: 88%;
+    flex-shrink: 0;        /* 消息不被 flex 压缩：超高时滚动而不是挤压 */
 }
 .message.user { align-self: flex-end; }
 .message.assistant, .message.system { align-self: flex-start; }
