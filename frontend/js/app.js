@@ -807,24 +807,18 @@ document.addEventListener('paste', function(e) {
 });
 
 function getModeASubtitleContext() {
-    // 模式A上下文 = 当前播放位置附近 ±2.5 分钟的字幕窗口。
-    // 之前整讲字幕全量塞进系统提示词，一节课上万字会迅速顶爆上下文/账单；
-    // 窗口化后既保留"讲到哪都知道"的语义，又把 token 开销压到可控范围。
+    // 模式A上下文 = 整讲字幕全文 + 当前播放位置。
+    // 一节视频的字幕仅 1~1.5 万 token（中文 ~1.2 token/字），对 DeepSeek
+    // 的大上下文毫无压力；数学讲解前后依赖强（前 30 分钟定理后 30 分钟引用），
+    // 全量保留才能让 agent 完整理解整讲脉络，再配合播放位置时间戳，
+    // agent 可以精确知道用户学到第几分钟。
     if (!state.subtitles.length) return '';
     const video = document.getElementById('videoPlayer');
     const t = (video && typeof video.currentTime === 'number') ? video.currentTime : 0;
-    const WINDOW = 150;  // 秒
-    const parts = [];
-    for (const s of state.subtitles) {
-        if (s.start >= t - WINDOW && s.start <= t + WINDOW) parts.push(s.text);
-    }
-    // 兜底：窗口太小时（如视频开头前几秒）给开头一小段，避免上下文为空
-    if (parts.length < 3) {
-        for (let i = 0; i < Math.min(10, state.subtitles.length); i++) {
-            parts.push(state.subtitles[i].text);
-        }
-    }
-    return parts.join(' ');
+    const d = (video && typeof video.duration === 'number' && isFinite(video.duration)) ? video.duration : 0;
+    const pos = `${fmtTime(t)} / ${fmtTime(d)}`;
+    const full = state.subtitles.map(s => (s && s.text) || '').filter(Boolean).join(' ');
+    return `【当前播放位置：${pos}】 ${full}`;
 }
 
 // ===== 图片上传 =====

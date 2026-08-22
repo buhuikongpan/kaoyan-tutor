@@ -22,7 +22,9 @@ MODE_NAMES = {"A": "即时问答", "B": "引导输出", "C": "课后问答"}
 DEFAULT_NAME = "新对话"
 MAX_HISTORY = 40           # 回填给模型的历史消息上限（条）
 MAX_REASONING_ROUNDS = 2   # 思维链只回填最近 N 轮 assistant（防 token 膨胀）
-MAX_SUBTITLE_CHARS = 8000  # 模式B 视频字幕上下文总字数上限
+# 模式B 视频字幕上限：单节视频字幕约 1~1.5 万 token，勾选 3 节长课约 4~5 万 token，
+# 60k 字符容量足够容纳；截断仅防御极端累积（如勾选超长课程/多视频），正常不触发
+MAX_SUBTITLE_CHARS = 60000
 
 
 # ---------- DB 读写辅助（统一走调用方传入的 Session） ----------
