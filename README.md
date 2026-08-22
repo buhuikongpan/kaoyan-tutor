@@ -38,7 +38,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### 或双击脚本
-`scripts\start.bat`（自动检查依赖并启动）
+`scripts\考研学习平台.bat`（自动检查依赖并启动；服务已在运行时会询问是否重启）
 
 ---
 
@@ -124,7 +124,7 @@ DIFY考研学习平台/
 ├── frontend/                  # 前端页面（原生 JS + KaTeX）
 │   ├── index.html
 │   ├── css/  js/  vendor/
-├── scripts/start.bat          # 一键启动
+├── scripts/考研学习平台.bat          # 一键启动
 ├── docs/                      # 项目文档（Agent 提示词、备忘）
 ├── storage/                   # 运行时数据：videos/（视频）subtitles/（字幕）summaries/（课程总结）
 ├── data/                      # SQLite + 日志（运行时数据）
@@ -151,7 +151,8 @@ python -m unittest discover -s tests -v
 
 ## 常见问题
 
-- **平台打不开**：双击 `scripts\start.bat`（弹窗开着即运行，关窗即停）
+- **平台打不开**：双击 `scripts\考研学习平台.bat`（弹窗开着即运行，关窗即停）
+- **服务更新后想重启**：再双击一次脚本，按提示输入 Y 即结束旧进程并重启
 - **看图报错 429**：智谱免费模型限流，等 1-2 分钟重试
 - **字幕提取失败**：检查 `QWEN_API_KEY` 与网络
 - **接口提示"未授权"**：服务器 `.env` 已配 `PLATFORM_TOKEN`，请在 ⚙️ 设置中填写
