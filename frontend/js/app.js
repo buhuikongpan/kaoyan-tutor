@@ -1140,22 +1140,25 @@ function renderMath(text) {
         d.innerHTML = s;
         return d.textContent;
     };
-    // 替换 $$...$$ 块级公式
-    text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => {
+    const render = (formula, display) => {
         try {
-            return katex.renderToString(unescapeMath(formula).trim(), {displayMode: true, throwOnError: false});
-        } catch(e) {
-            return `<code>$$${escHtml(formula)}$$</code>`;
+            return katex.renderToString(unescapeMath(formula).trim(), { displayMode: display, throwOnError: false });
+        } catch (e) {
+            // 渲染失败：原样返回公式（保留可读性），不吞不伪装
+            return display ? `$$${escHtml(formula)}$$` : `$${escHtml(formula)}$`;
         }
-    });
-    // 替换 $...$ 行内公式
-    text = text.replace(/\$([^\$\n]+?)\$/g, (_, formula) => {
-        try {
-            return katex.renderToString(unescapeMath(formula).trim(), {displayMode: false, throwOnError: false});
-        } catch(e) {
-            return `$${escHtml(formula)}$`;
-        }
-    });
+    };
+
+    // 0) 归一化模型偶尔违规输出的形态：\[...\] → $$...$$、\(...\) → $...$
+    //    提示词里是软约束，这里在渲染层做硬兜底，任何形态都能渲染
+    text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_, f) => `$$${f}$$`);
+    text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, f) => `$${f}$`);
+
+    // 1) $$...$$ 块级公式（允许跨行）
+    text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => render(formula, true));
+
+    // 2) $...$ 行内公式（不跨行、非贪婪，且要求 $ 前不是另一公式的 $）
+    text = text.replace(/(^|[^\$])\$([^\$\n]+?)\$(?!\$)/g, (m, prefix, formula) => prefix + render(formula, false));
     return text;
 }
 

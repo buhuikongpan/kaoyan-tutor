@@ -5,6 +5,7 @@
 import json
 import base64
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -18,6 +19,17 @@ from ...models import Video, Subtitle, ChatSession, ChatMessage
 from ..deps import get_db
 
 router = APIRouter(prefix="/api/chat", tags=["聊天"])
+
+
+def normalize_math(text: str) -> str:
+    """公式形态硬约束：把模型偶尔输出的 \(...\) / \[...\] 统一归一化为 $...$ / $$...$$。
+
+    提示词里对模型是软约束；这里在落库前做硬清洗，保证库里和历史
+    恢复的消息都是前端能渲染的形态。
+    """
+    text = re.sub(r'\\\[([\s\S]*?)\\\]', r'$$\1$$', text)
+    text = re.sub(r'\\\(([\s\S]*?)\\\)', r'$\1$', text)
+    return text
 
 SUBJECT_NAMES = {"math": "数学", "english": "英语", "politics": "政治"}
 MODE_NAMES = {"A": "即时问答", "B": "引导输出", "C": "课后问答"}
@@ -300,6 +312,8 @@ async def send_message_stream(
             if not answer:
                 yield _sse({"type": "error", "detail": "AI 返回为空"})
                 return
+            # 公式形态硬约束：落库前统一为 $ 格式（前端渲染的形态）
+            answer = normalize_math(answer)
             # 只有在完整拿到回答后才写入历史（中途断流不落库，前端可重发）
             _append_message(db, conv_id, subject, mode, "assistant", answer, reasoning=reasoning)
             yield _sse({"type": "done", "conversation_id": conv_id})

@@ -25,6 +25,7 @@ SSE_RESPONSE = (
     'data: {"choices":[{"delta":{"content":"你好"}}]}\n\n'
     'data: {"choices":[{"delta":{"content":"，流式测试。"}}]}\n\n'
     'data: {"choices":[{"delta":{"content":"公式 $$\\\\int x\\\\,dx$$"}}]}\n\n'
+    'data: {"choices":[{"delta":{"content":" 违规公式 \\\\(x^2\\\\) 应归一化"}}]}\n\n'
     'data: [DONE]\n\n'
 )
 
@@ -112,7 +113,8 @@ class StreamTest(unittest.TestCase):
 
         self.assertFalse(errs, f"出现 error 事件: {errs}")
         self.assertTrue(deltas, "没有收到 delta 事件")
-        self.assertEqual("".join(deltas), "你好，流式测试。公式 $$\\int x\\,dx$$")
+        # δ 事件为原始文本（前端 renderMath 兜底 \\(...\\)）；落库时已归一化
+        self.assertEqual("".join(deltas), "你好，流式测试。公式 $$\\int x\\,dx$$ 违规公式 \\(x^2\\) 应归一化")
         self.assertEqual(len(done), 1)
         self.assertEqual(done[0]["conversation_id"], TEST_CONV)
 
@@ -121,7 +123,12 @@ class StreamTest(unittest.TestCase):
             msgs = db.query(ChatMessage).filter(ChatMessage.conv_id == TEST_CONV)\
                 .order_by(ChatMessage.seq).all()
             self.assertEqual([m.role for m in msgs], ["user", "assistant"])
-            self.assertEqual(msgs[-1].content, "你好，流式测试。公式 $$\\int x\\,dx$$")
+            # 后端 normalize_math 硬约束：\(...\) 已转成 $...$ 再落库
+            self.assertEqual(
+                msgs[-1].content,
+                "你好，流式测试。公式 $$\\int x\\,dx$$ 违规公式 $x^2$ 应归一化",
+            )
+            self.assertNotIn("\\(", msgs[-1].content)
             self.assertIn("内部思考中", msgs[-1].reasoning)  # reasoning 落库但不进正文
             sess = db.query(ChatSession).filter(ChatSession.conv_id == TEST_CONV).first()
             self.assertEqual(sess.name, "测试流式")  # 首条提问自动命名
