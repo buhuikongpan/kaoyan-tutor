@@ -43,16 +43,28 @@ if errorlevel 1 (
     echo [OK] Dependencies ready
 )
 
-REM ç‰ˆæœ¬é…å¥—ï¼šfastapi 0.141.1 + starlette 1.6.0ï¼ˆ2025-08 å‡çº§ï¼Œä¸å†å¼ºåˆ¶é™çº§ starlette 0.27ï¼‰
-
-REM ============ 4. Start ============
-echo.
-netstat -ano | findstr ":8000 " | findstr LISTENING >nul 2>&1
-if not errorlevel 1 (
-    echo [OK] Platform already running. Opening browser...
-    start "" http://localhost:8000
-    pause
-    exit /b 0
+REM ============ 4. ¶Ë¿Ú 8000 ¼ì²â£ºÒÑÔËÐÐÔòÑ¯ÎÊÖØÆô ============
+set "OLDPID="
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":8000 " ^| findstr LISTENING') do (
+    if not defined OLDPID set "OLDPID=%%p"
+)
+if defined OLDPID (
+    echo [!] ¼ì²âµ½¾É·þÎñ½ø³Ì ^(PID: !OLDPID!^) ÈÔÔÚÔËÐÐ
+    set "CONFIRM="
+    set /p "CONFIRM=´úÂëÒÑ¸üÐÂÐèÖØÆô£º°´ Y ½áÊø¾É½ø³Ì²¢ÖØÆô£¬°´ N ½ö´ò¿ªÒ³Ãæ£º"
+    if /i "!CONFIRM!"=="Y" (
+        echo [*] ½áÊø¾É½ø³Ì !OLDPID! ...
+        taskkill /PID !OLDPID! /F >nul 2>&1
+        timeout /t 1 /nobreak >nul
+    ) else (
+        echo [OK] ±£Áô¾É·þÎñ£¬´ò¿ªÒ³Ãæ¡£
+        start "" http://localhost:8000
+        exit /b 0
+    )
+)
+REM Ë«±£ÏÕ£ºÇåÀí¿ÉÄÜ²ÐÁôµÄ¼àÌý£¨°´ PID ¾«È·½áÊø£¬¾ø²»°´½ø³ÌÃûÅúÁ¿É±£©
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":8000 " ^| findstr LISTENING') do (
+    taskkill /PID %%p /F >nul 2>&1
 )
 
 echo [OK] Starting server...
