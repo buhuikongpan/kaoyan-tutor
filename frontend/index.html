@@ -139,34 +139,81 @@
 
     <!-- 设置弹窗 -->
     <div class="modal-overlay" id="settingsModal" style="display:none" onclick="closeSettings(event)">
-        <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-content" style="max-width:560px" onclick="event.stopPropagation()">
             <div class="modal-header">
-                <h2>⚙️ 设置</h2>
+                <h2>⚙️ 模型设置</h2>
                 <button class="btn-close" onclick="closeSettings()">✕</button>
             </div>
             <div class="modal-body">
-                <h3 style="margin-bottom:12px">📋 服务端配置状态</h3>
-                <div class="form-card">
-                    <p id="stDeepseek">… 检测中 …</p>
-                    <p id="stZhipu">…</p>
-                    <p id="stQwen">…</p>
-                    <p id="stAuth">…</p>
-                    <div style="font-size:12px;color:#999;margin-top:6px">
-                        所有 Key 只在服务器 <code>.env</code> 中配置（见 <code>.env.example</code>），平台不再提供网页写入。
+
+                <div class="form-group">
+                    <label>🧠 主模型（聊天 / 总结推理）</label>
+                    <div class="form-card">
+                        <label>API 地址（OpenAI 兼容，如 https://api.deepseek.com/v1）</label>
+                        <input type="text" id="setMainBaseUrl" placeholder="https://api.deepseek.com/v1">
+                        <label>API Key（留空 = 保持已有 Key）</label>
+                        <input type="password" id="setMainKey" placeholder="sk-...">
+                        <label>模型名称</label>
+                        <input type="text" id="setMainModel" list="mainModelList" placeholder="deepseek-v4-flash">
+                        <datalist id="mainModelList">
+                            <option value="deepseek-v4-flash"></option>
+                            <option value="deepseek-chat"></option>
+                            <option value="deepseek-reasoner"></option>
+                            <option value="glm-4.5"></option>
+                            <option value="qwen3-max"></option>
+                        </datalist>
+                        <label class="checkbox-row"><input type="checkbox" id="setMainMultimodal"> 主模型支持多模态（可直接发图片，无需视觉辅助）</label>
                     </div>
                 </div>
 
                 <div class="form-group">
-                    <label>🔐 访问令牌（可选）</label>
+                    <label>👁️ 视觉辅助模型（看图；主模型支持多模态时可关闭）</label>
                     <div class="form-card">
-                        <input type="text" id="setToken" placeholder="服务器 .env 中 PLATFORM_TOKEN 的值（留空则不携带）">
+                        <label class="checkbox-row"><input type="checkbox" id="setVisionEnabled" checked> 启用视觉辅助</label>
+                        <label>API 地址</label>
+                        <input type="text" id="setVisionBaseUrl" placeholder="https://open.bigmodel.cn/api/paas/v4">
+                        <label>API Key（留空 = 保持已有 Key）</label>
+                        <input type="password" id="setVisionKey" placeholder="...">
+                        <label>模型名称</label>
+                        <input type="text" id="setVisionModel" list="visionModelList" placeholder="glm-4v-flash">
+                        <datalist id="visionModelList">
+                            <option value="glm-4v-flash"></option>
+                            <option value="glm-4.6v-flash"></option>
+                            <option value="qwen-vl-plus"></option>
+                            <option value="qwen-vl-max"></option>
+                        </datalist>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>🎬 语音识别 ASR（视频字幕）</label>
+                    <div class="form-card">
+                        <label>API 地址</label>
+                        <input type="text" id="setAsrBaseUrl" placeholder="https://dashscope.aliyuncs.com">
+                        <label>API Key（留空 = 保持已有 Key）</label>
+                        <input type="password" id="setAsrKey" placeholder="sk-...">
+                        <label>模型名称</label>
+                        <input type="text" id="setAsrModel" list="asrModelList" placeholder="qwen3-asr-flash">
+                        <datalist id="asrModelList">
+                            <option value="qwen3-asr-flash"></option>
+                            <option value="qwen2-audio-instruct"></option>
+                        </datalist>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>🔐 访问令牌（可选，服务端 .env 配置 PLATFORM_TOKEN 后必填）</label>
+                    <div class="form-card">
+                        <input type="text" id="setToken" placeholder="PLATFORM_TOKEN 的值（未开启可留空）">
                         <div style="font-size:12px;color:#999;margin-top:4px">
-                            若服务器已启用 PLATFORM_TOKEN，所有接口需此令牌才能访问。
+                            模型配置保存到服务器数据库，立即生效；未填 Key 表示保留已有 Key。
                         </div>
                     </div>
                 </div>
 
-                <button class="btn-primary" onclick="saveSettings()">💾 保存</button>
+                <div style="text-align:right;margin-top:14px">
+                    <button class="btn-primary" onclick="saveSettings()">💾 保存配置</button>
+                </div>
             </div>
         </div>
     </div>
@@ -186,7 +233,7 @@
     </div>
 
     <!-- 内联测试：验证 JS 是否能运行 -->
-    <script src="js/app.js?v=9"></script>
+    <script src="js/app.js?v=10"></script>
     <!-- KaTeX（本地化，不依赖 CDN，保证公式渲染稳定） -->
     <link rel="stylesheet" href="vendor/katex/katex.min.css">
     <script src="vendor/katex/katex.min.js" defer></script>

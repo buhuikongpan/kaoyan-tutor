@@ -1,15 +1,13 @@
 """LLM 服务（本地直连模式）
-- 聊天推理：DeepSeek V4 Flash（thinking 模式，SSE 流式）
-- 视觉分析：智谱 GLM-4V（多模态模型）
+- 聊天推理：主模型（默认 DeepSeek，thinking 模式，SSE 流式，可配置任意 OpenAI 兼容端点）
+- 视觉分析：视觉辅助模型（默认智谱 GLM-4V，多模态；主模型多模态时可关闭）
 """
 import json
 import httpx
 from typing import AsyncIterator, Optional, Tuple
 
 from ..core.config import settings
-
-DEEPSEEK_API = "https://api.deepseek.com/v1/chat/completions"
-ZHIPU_API = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+from ..core.model_config import load_model_config, get_endpoint
 
 # 流式整体超时 300s（thinking 模式下一次完整回答可能长达 1-2 分钟）
 STREAM_TIMEOUT = httpx.Timeout(300.0, connect=15.0)
@@ -87,10 +85,11 @@ def _build_system_prompt(subject: str, mode: str, subtitle_context: str) -> str:
     )
 
 
-def _completion_payload(messages: list, system_prompt: str, stream: bool) -> dict:
+def _completion_payload(messages: list, system_prompt: str, stream: bool,
+                        model: str) -> dict:
     full_messages = [{"role": "system", "content": system_prompt}] + messages
     return {
-        "model": "deepseek-v4-flash",
+        "model": model,
         "messages": full_messages,
         "thinking": {"type": "enabled"},
         "reasoning_effort": "high",  # 思考想透再写正文，避免在回答里即兴发挥
@@ -106,26 +105,29 @@ async def chat_completion_stream(
     mode: str = "A",
     subtitle_context: str = "",
 ) -> AsyncIterator[Tuple[str, str]]:
-    """流式调用 DeepSeek V4 Flash（thinking 模式），逐段产出：
+    """流式调用主模型（thinking 模式，OpenAI 兼容端点），逐段产出：
 
         ("reasoning", "…思考片段…")  —— 思维链，不展示，由调用方累积存入历史
         ("content", "…正文片段…")    —— 最终回答，逐字展示给用户
 
     调用方负责累积两类文本；HTTP/API 错误会以 RuntimeError 抛出。
     """
+    cfg = load_model_config()["main"]
+    endpoint = get_endpoint(cfg.get("base_url"), "/chat/completions")
     system_prompt = _build_system_prompt(subject, mode, subtitle_context)
-    payload = _completion_payload(messages, system_prompt, stream=True)
+    payload = _completion_payload(messages, system_prompt, stream=True,
+                                  model=cfg.get("model") or "deepseek-v4-flash")
 
     headers = {
-        "Authorization": f"Bearer {settings.deepseek_api_key}",
+        "Authorization": f"Bearer {cfg.get('api_key') or settings.deepseek_api_key}",
         "Content-Type": "application/json",
     }
 
     async with httpx.AsyncClient(timeout=STREAM_TIMEOUT) as client:
-        async with client.stream("POST", DEEPSEEK_API, json=payload, headers=headers) as resp:
+        async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
             if resp.status_code != 200:
                 body = (await resp.aread()).decode("utf-8", errors="replace")
-                raise RuntimeError(f"DeepSeek API {resp.status_code}: {body[:800]}")
+                raise RuntimeError(f"主模型 API {resp.status_code}: {body[:800]}")
             async for line in resp.aiter_lines():
                 line = line.strip()
                 if not line.startswith("data:"):
@@ -176,9 +178,15 @@ SUMMARIZE_MERGE_PROMPT = """下面是同一节考研课《{title}》按时间分
 {parts}"""
 
 
+def _simple_endpoint() -> str:
+    """主模型 endpoint（简单调用与流式共用同一配置）"""
+    cfg = load_model_config()["main"]
+    return get_endpoint(cfg.get("base_url"), "/chat/completions")
+
+
 def _simple_headers() -> dict:
     return {
-        "Authorization": f"Bearer {settings.deepseek_api_key}",
+        "Authorization": f"Bearer {load_model_config()['main'].get('api_key') or settings.deepseek_api_key}",
         "Content-Type": "application/json",
     }
 
@@ -188,12 +196,13 @@ async def chat_completion_simple(
     max_tokens: int = 4096,
     temperature: float = 0.3,
 ) -> str:
-    """普通（非流式、非 thinking）调用 DeepSeek，用于总结生成等批量任务。
+    """普通（非流式、非 thinking）调用主模型，用于总结生成等批量任务。
 
     比流式聊天快得多（不开思维链），返回纯文本。
     """
+    model = load_model_config()["main"].get("model") or "deepseek-v4-flash"
     payload = {
-        "model": "deepseek-v4-flash",
+        "model": model,
         "messages": messages,
         "thinking": {"type": "disabled"},  # 总结/提取不需要思考，快且省
         "temperature": temperature,
@@ -201,9 +210,9 @@ async def chat_completion_simple(
         "stream": False,
     }
     async with httpx.AsyncClient(timeout=STREAM_TIMEOUT) as client:
-        resp = await client.post(DEEPSEEK_API, json=payload, headers=_simple_headers())
+        resp = await client.post(_simple_endpoint(), json=payload, headers=_simple_headers())
         if resp.status_code != 200:
-            raise RuntimeError(f"DeepSeek API {resp.status_code}: {resp.text[:800]}")
+            raise RuntimeError(f"主模型 API {resp.status_code}: {resp.text[:800]}")
         result = resp.json()
         return result.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
 
@@ -243,9 +252,10 @@ async def vision_analyze(
     image_base64: str,
     question: str = "请详细描述这张图片中的内容",
 ) -> Optional[str]:
-    """视觉分析：用智谱 GLM-4V 识别图片内容，返回文字描述"""
+    """视觉分析：用视觉辅助模型（默认智谱 GLM-4V）识别图片内容，返回文字描述"""
+    v = load_model_config()["vision"]
     headers = {
-        "Authorization": f"Bearer {settings.zhipu_api_key}",
+        "Authorization": f"Bearer {v.get('api_key') or settings.zhipu_api_key}",
         "Content-Type": "application/json",
     }
 
@@ -258,7 +268,7 @@ async def vision_analyze(
     ]
 
     payload = {
-        "model": "glm-4v-flash",  # 免费版视觉模型，也可用 glm-4.6v-flash
+        "model": v.get("model") or "glm-4v-flash",
         "messages": [{"role": "user", "content": content_parts}],
         "temperature": 0.5,
         "max_tokens": 512,
@@ -267,7 +277,8 @@ async def vision_analyze(
 
     async with httpx.AsyncClient(timeout=60) as client:
         try:
-            resp = await client.post(ZHIPU_API, json=payload, headers=headers)
+            resp = await client.post(get_endpoint(v.get("base_url"), "/chat/completions"),
+                             json=payload, headers=headers)
             resp.raise_for_status()
             result = resp.json()
             return result.get("choices", [{}])[0].get("message", {}).get("content", "")

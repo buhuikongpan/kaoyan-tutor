@@ -1149,41 +1149,95 @@ async function restoreActiveConversation() {
     if (convId) await selectConversation(convId);
 }
 
-// ===== 设置 =====
+// ===== 设置（模型 API 配置，保存即生效）=====
 function showSettings() {
     document.getElementById('settingsModal').style.display = 'flex';
     const tokenEl = document.getElementById('setToken');
     if (tokenEl) tokenEl.value = getApiToken();
-    loadConfigStatus();
+    // 清空 Key 输入框（留空 = 保留已有 Key），加载当前配置填充
+    ['setMainKey', 'setVisionKey', 'setAsrKey'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    loadModelConfig();
 }
 function closeSettings(e) {
     if (e && e.target !== e.currentTarget) return;
     document.getElementById('settingsModal').style.display = 'none';
 }
-async function loadConfigStatus() {
+async function loadModelConfig() {
     try {
-        const resp = await apiFetch('/api/config/status');
+        const resp = await apiFetch('/api/config/model');
         if (!resp.ok) return;
-        const s = await resp.json();
-        const set = (id, ok, txt) => {
+        const c = await resp.json();
+        const fill = (id, v) => {
             const el = document.getElementById(id);
-            if (el) el.textContent = ok ? '✅ ' + txt : '❌ ' + txt;
+            if (el && v != null) el.value = v;
         };
-        set('stDeepseek', s.deepseek, 'DeepSeek 已配置（聊天）');
-        set('stZhipu', s.zhipu, '智谱已配置（看图）');
-        set('stQwen', s.qwen, '千问已配置（字幕 ASR）');
-        set('stAuth', s.auth_enabled, '鉴权已启用（请在下栏填写令牌）');
-        const stAuth = document.getElementById('stAuth');
-        if (stAuth && !s.auth_enabled) stAuth.textContent = '未启用（局域网内任何设备可访问）';
+        const ph = (id, hasKey) => {
+            const el = document.getElementById(id);
+            if (el && !hasKey) el.placeholder = '尚未配置 Key';
+        };
+        fill('setMainBaseUrl', c.main && c.main.base_url);
+        fill('setMainModel', c.main && c.main.model);
+        const mm = document.getElementById('setMainMultimodal');
+        if (mm) mm.checked = !!(c.main && c.main.multimodal);
+        ph('setMainKey', c.main && c.main.has_key);
+        if (c.main && !c.main.has_key) document.getElementById('setMainKey').placeholder = '尚未配置 Key';
+
+        fill('setVisionBaseUrl', c.vision && c.vision.base_url);
+        fill('setVisionModel', c.vision && c.vision.model);
+        const ve = document.getElementById('setVisionEnabled');
+        if (ve) ve.checked = !!(c.vision && c.vision.enabled);
+        if (c.vision && !c.vision.has_key) document.getElementById('setVisionKey').placeholder = '尚未配置 Key';
+
+        fill('setAsrBaseUrl', c.asr && c.asr.base_url);
+        fill('setAsrModel', c.asr && c.asr.model);
+        if (c.asr && !c.asr.has_key) document.getElementById('setAsrKey').placeholder = '尚未配置 Key';
     } catch (e) {}
 }
-function saveSettings() {
+async function saveSettings() {
+    // 访问令牌（本地）
     const token = document.getElementById('setToken').value.trim();
     try {
         if (token) localStorage.setItem('kaoyan_token', token);
         else localStorage.removeItem('kaoyan_token');
     } catch (e) {}
-    alert(token ? '✅ 令牌已保存，立即生效' : '✅ 已清除令牌（若服务器 .env 仍配置了 PLATFORM_TOKEN，接口将无法访问）');
+
+    // 模型配置（服务器，留空 Key = 保留已有）
+    const payload = {
+        main: {
+            base_url: document.getElementById('setMainBaseUrl').value.trim(),
+            api_key: document.getElementById('setMainKey').value.trim(),
+            model: document.getElementById('setMainModel').value.trim(),
+            multimodal: document.getElementById('setMainMultimodal').checked,
+        },
+        vision: {
+            enabled: document.getElementById('setVisionEnabled').checked,
+            base_url: document.getElementById('setVisionBaseUrl').value.trim(),
+            api_key: document.getElementById('setVisionKey').value.trim(),
+            model: document.getElementById('setVisionModel').value.trim(),
+        },
+        asr: {
+            base_url: document.getElementById('setAsrBaseUrl').value.trim(),
+            api_key: document.getElementById('setAsrKey').value.trim(),
+            model: document.getElementById('setAsrModel').value.trim(),
+        },
+    };
+    try {
+        const resp = await apiFetch('/api/config/model', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+            const d = await resp.json().catch(() => ({}));
+            throw new Error(d.detail || resp.status);
+        }
+        alert('✅ 模型配置已保存，立即生效');
+    } catch (err) {
+        alert(`❌ 保存失败：${err.message}`);
+    }
     closeSettings();
 }
 

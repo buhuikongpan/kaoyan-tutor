@@ -76,3 +76,12 @@ class ChatMessage(Base):
     reasoning = Column(Text, default="")  # DeepSeek 思维链（下轮回填保持连续性）
     seq = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class PlatformConfig(Base):
+    """平台运行时配置（模型 API 等，key-value JSON），设置页保存即生效"""
+    __tablename__ = "platform_config"
+
+    key = Column(String(64), primary_key=True)  # 如 model_config
+    value = Column(Text, default="{}")          # JSON 字符串
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow)

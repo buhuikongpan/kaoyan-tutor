@@ -1,4 +1,4 @@
-"""语音识别 — 千问 ASR（Qwen3-ASR-Flash，支持 base64 直接上传）"""
+"""语音识别 — 默认千问 ASR（Qwen3-ASR-Flash，支持 base64 直接上传；可配置）"""
 import os
 import json
 import re
@@ -9,9 +9,16 @@ import asyncio
 import httpx
 from typing import List, Tuple, Optional
 from ..core.config import settings
+from ..core.model_config import load_model_config, get_endpoint
 
-QWEN_ASR_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+# 千问 multimodal-generation 端点（base_url 后拼接的服务路径）
+QWEN_ASR_PATH = "/api/v1/services/aigc/multimodal-generation/generation"
 CHUNK_SEC = 50
+
+
+def _asr_config():
+    cfg = load_model_config()["asr"]
+    return cfg, get_endpoint(cfg.get("base_url"), QWEN_ASR_PATH)
 
 
 def detect_silences(audio_path: str) -> List[Tuple[float, float]]:
@@ -86,16 +93,17 @@ def _convert_to_pcm_segments(audio_path: str, output_dir: str) -> List[Tuple[str
 
 
 async def _transcribe_chunk(audio_data: bytes) -> Optional[str]:
-    """用千问 ASR 识别一段音频"""
+    """用 ASR 模型识别一段音频（默认千问）"""
+    _cfg, _endpoint = _asr_config()
     audio_b64 = base64.b64encode(audio_data).decode("utf-8")
     data_uri = f"data:audio/wav;base64,{audio_b64}"
 
     headers = {
-        "Authorization": f"Bearer {settings.qwen_api_key}",
+        "Authorization": f"Bearer {_cfg.get('api_key') or settings.qwen_api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "qwen3-asr-flash",
+        "model": _cfg.get("model") or "qwen3-asr-flash",
         "input": {
             "messages": [
                 {
@@ -113,9 +121,9 @@ async def _transcribe_chunk(audio_data: bytes) -> Optional[str]:
     }
 
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(QWEN_ASR_URL, json=payload, headers=headers)
+        resp = await client.post(_endpoint, json=payload, headers=headers)
         if resp.status_code != 200:
-            raise RuntimeError(f"千问 ASR 失败: {resp.status_code} {resp.text[:300]}")
+            raise RuntimeError(f"ASR 失败: {resp.status_code} {resp.text[:300]}")
         result = resp.json()
         # 从返回中提取文本
         try:

@@ -15,6 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ...services.llm_service import chat_completion_stream, vision_analyze
+from ...core.model_config import load_model_config
 from ...models import Video, Subtitle, ChatSession, ChatMessage
 from ..deps import get_db
 
@@ -249,23 +250,36 @@ async def send_message_stream(
 
     # ---- 构建用户消息（文本 + 可选图片） ----
     user_content: str
+    multimodal_content = None  # 主模型多模态时直接传图片数组
     if image_base64:
-        try:
-            raw = image_base64.split(",", 1)[1]
-            q = f"这是一张考研学习相关的图片，用户的问题是：{query}。请详细描述图片内容，特别是任何文字、公式、图表。"
-            vision_result = await vision_analyze(raw, q)
-            if vision_result and not vision_result.startswith("[图片已收到"):
-                image_description = f"\n[用户上传了图片，AI视觉分析结果：{vision_result}]"
-            else:
-                image_description = "\n[用户上传了图片]"
-        except Exception as e:
-            image_description = f"\n[用户上传了图片，分析异常: {str(e)}]"
-        user_content = query + image_description
+        cfg = load_model_config()
+        if cfg["main"].get("multimodal"):
+            # 主模型本身多模态：图片按 OpenAI 格式直接发给主模型
+            multimodal_content = [
+                {"type": "text", "text": query},
+                {"type": "image_url", "image_url": {"url": image_base64}},
+            ]
+            user_content = query + "\n[用户上传了图片]"
+        elif cfg["vision"].get("enabled"):
+            # 视觉辅助模型（默认智谱）：先分析成文字描述再给主模型
+            try:
+                raw = image_base64.split(",", 1)[1]
+                q = f"这是一张考研学习相关的图片，用户的问题是：{query}。请详细描述图片内容，特别是任何文字、公式、图表。"
+                vision_result = await vision_analyze(raw, q)
+                if vision_result and not vision_result.startswith("[图片已收到"):
+                    image_description = f"\n[用户上传了图片，AI视觉分析结果：{vision_result}]"
+                else:
+                    image_description = "\n[用户上传了图片]"
+            except Exception as e:
+                image_description = f"\n[用户上传了图片，分析异常: {str(e)}]"
+            user_content = query + image_description
+        else:
+            user_content = query + "\n[用户上传了图片，但主模型不支持图片且视觉辅助已关闭]"
     else:
         user_content = query
 
-    _append_message(db, conv_id, subject, mode, "user", user_content)
-    history.append({"role": "user", "content": user_content})
+    _append_message(db, conv_id, subject, mode, "user", multimodal_content or user_content)
+    history.append({"role": "user", "content": multimodal_content or user_content})
 
     # 模式B：勾选视频的上下文——优先用「课程总结」（高密度、跨多节不爆上下文），
     # 没有总结的视频回退字幕全文；总量仍由 _truncate 兜底（1M 上下文下基本不触发）
