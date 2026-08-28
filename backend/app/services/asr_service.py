@@ -10,6 +10,13 @@ provider 取值（model_config["asr"]["provider"]）：
 import os
 import re
 import base64
+
+# HuggingFace 国内加速：默认走 hf-mirror.com 镜像下载 whisper 模型
+# （官方 huggingface.co 在国内常被代理/加速器 TLS 拦截报 SSL 证书错误）。
+# HF_HUB_DISABLE_XET=1：hf-mirror 的 Xet 加速通道不兼容（会 401），禁掉走普通 HTTP。
+# 已设置 HF_ENDPOINT / HF_HUB_DISABLE_XET 环境变量时尊重用户自己的配置。
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 import subprocess
 import tempfile
 import asyncio
@@ -32,13 +39,17 @@ def _asr_config():
 
 
 def _asr_provider():
-    """返回 (provider, size)。provider: local/qwen；size: small/medium。"""
+    """返回 (provider, size)。provider: local/qwen；size: 模型档位。
+    档位说明：small（快）、medium（更准）、large-v3-turbo（快+准，推荐，
+    速度接近 small、准确度接近 large-v3）、large-v3（最准最慢）、
+    distil-large-v3（最快，精度接近 large-v3）。
+    """
     cfg = load_model_config()["asr"]
     provider = (cfg.get("provider") or "local").strip().lower()
     size = (cfg.get("size") or "small").strip().lower()
     if provider not in ("local", "qwen"):
         provider = "local"
-    if size not in ("small", "medium", "large-v3"):
+    if size not in ("small", "medium", "large-v3", "large-v3-turbo", "distil-large-v3"):
         size = "small"
     return provider, size
 

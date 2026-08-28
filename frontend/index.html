@@ -214,10 +214,13 @@
                             <option value="local">本地 Whisper（免费 / 离线 / 字幕时间轴更准）</option>
                             <option value="qwen">千问云 API（在线，按量计费）</option>
                         </select>
-                        <label>本地模型档位（仅本地引擎生效）</label>
+                        <label>本地模型档位（仅本地引擎生效；GPU 上 turbo 又快又准）</label>
                         <select id="setAsrSize">
                             <option value="small">small（快，基本够用）</option>
                             <option value="medium">medium（更准，更慢）</option>
+                            <option value="large-v3-turbo">large-v3-turbo ★推荐（速度≈small，准确度≈large-v3）</option>
+                            <option value="large-v3">large-v3（最准，最慢，显存要求高）</option>
+                            <option value="distil-large-v3">distil-large-v3（最快，精度接近 large-v3）</option>
                         </select>
                         <label>API 地址（可输 base 或完整端点）</label>
                         <input type="text" id="setAsrBaseUrl" placeholder="https://dashscope.aliyuncs.com 或完整端点">
