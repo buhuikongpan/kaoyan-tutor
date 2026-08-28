@@ -158,6 +158,6 @@ python -m unittest discover -s tests -v
 - **平台打不开**：双击 `scripts\考研学习平台.bat`（弹窗开着即运行，关窗即停）
 - **服务更新后想重启**：再双击一次脚本，按提示输入 Y 即结束旧进程并重启
 - **看图报错 429**：智谱免费模型限流，等 1-2 分钟重试
-- **字幕提取失败**：检查 `QWEN_API_KEY` 与网络
+- **字幕提取失败**：检查 `QWEN_API_KEY` 与网络；若设置页识别引擎是「本地 Whisper」，需先 `pip install faster-whisper`（或改用千问云）
 - **接口提示"未授权"**：服务器 `.env` 已配 `PLATFORM_TOKEN`，请在 ⚙️ 设置中填写
 - **starlette 报错**：确认 `pip install starlette==1.6.0`（fastapi 0.141.1 配套版本）

@@ -8,3 +8,6 @@ python-dotenv==1.0.0
 sqlalchemy==2.0.23
 pydantic==2.13.4
 pydantic-settings==2.14.2
+
+# 可选依赖：设置页 ASR 引擎选「本地 Whisper」时需要（免费/离线/时间轴更准）。
+# pip install faster-whisper   （不想装就直接在设置页把识别引擎切为「千问云」并填 Key）
