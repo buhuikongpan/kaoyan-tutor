@@ -1245,18 +1245,19 @@ async function toggleVoiceInput() {
         setVoiceBtnUI(true, `${voiceSec}s`);
         if (voiceSec >= VOICE_MAX_SEC) stopVoiceInput();
     }, 1000);
-    // 实时草稿：本地与千问云都支持（qwen3-asr-flash 免费模型，2.5s 串行一问压力极小）
-    voiceLiveTimer = setInterval(() => { voiceLiveTick(); }, VOICE_LIVE_MS);
-    setTimeout(() => voiceLiveTick(), 600);  // 尽快出第一版草稿
-    if (voiceEngine === 'qwen') {
-        addSystemMessage('🎤 录音中…千问云实时草稿（免费，电脑零负担），说完再点一次按钮定稿');
-    } else {
+    // 实时草稿只对本地引擎开：云引擎按音频秒计费，每 2.5s 重转整段会放大 ~7 倍费用，
+    // 云端退回「停止后整段转写」（30 秒约 6 厘钱，可忽略）
+    if (voiceEngine === 'local') {
+        voiceLiveTimer = setInterval(() => { voiceLiveTick(); }, VOICE_LIVE_MS);
+        setTimeout(() => voiceLiveTick(), 600);  // 尽快出第一版草稿
         addSystemMessage('🎤 录音中…本地 Whisper 实时草稿（免费离线），说完再点一次按钮定稿');
+    } else {
+        addSystemMessage('🎤 录音中…千问云识别（约 ¥0.013/分钟），说完再点一次按钮定稿');
     }
 }
 
 // 语音输入引擎解析：按设置页 asr.voice_provider（auto/local/qwen）；
-// auto = 有千问 Key 走云（免费 qwen3-asr-flash），否则本地 Whisper
+// auto = 有千问 Key 走云（qwen3-asr-flash，约 ¥0.013/分钟），否则本地 Whisper
 async function detectVoiceEngine() {
     try {
         const resp = await apiFetch('/api/config/model');

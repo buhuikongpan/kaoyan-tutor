@@ -212,13 +212,13 @@
                         <label>识别引擎（视频字幕用）</label>
                         <select id="setAsrProvider">
                             <option value="local">本地 Whisper（免费 / 离线 / 字幕时间轴更准）</option>
-                            <option value="qwen">千问云（qwen3-asr-flash 免费模型，在线）</option>
+                            <option value="qwen">千问云（qwen3-asr-flash，约 ¥0.013/分钟）</option>
                         </select>
-                        <label>🎤 语音输入引擎（独立于字幕；实时草稿也用它）</label>
+                        <label>🎤 语音输入引擎（独立于字幕）</label>
                         <select id="setAsrVoiceProvider">
-                            <option value="auto">自动（推荐）：有千问 Key 用云（免费，电脑零负担），否则本地</option>
-                            <option value="local">本地 Whisper（免费离线，占本机资源）</option>
-                            <option value="qwen">千问云（qwen3-asr-flash 免费，需填下方 Key）</option>
+                            <option value="auto">自动（推荐）：有千问 Key 用云（约 ¥0.013/分钟，电脑零负担），否则本地</option>
+                            <option value="local">本地 Whisper（免费离线，实时草稿；占本机资源）</option>
+                            <option value="qwen">千问云（约 ¥0.013/分钟，无实时草稿，需填下方 Key）</option>
                         </select>
                         <label>本地模型档位（仅本地引擎生效；GPU 上 turbo 又快又准）</label>
                         <select id="setAsrSize">
