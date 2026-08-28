@@ -31,7 +31,9 @@ def _migrate():
 
     # 历史版本逐个补列
     add_column("chat_sessions", "name", "TEXT")
+    add_column("chat_sessions", "model", "VARCHAR(120) DEFAULT ''")
     add_column("videos", "summary_status", "VARCHAR(20) DEFAULT 'none'")
     add_column("videos", "summary_path", "VARCHAR(500) DEFAULT ''")
+    add_column("chat_messages", "quote", "TEXT")
     if "chat_messages" not in tables:
         print("[migrate] 将创建 chat_messages 表")

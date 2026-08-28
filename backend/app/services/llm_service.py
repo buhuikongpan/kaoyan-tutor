@@ -104,6 +104,7 @@ async def chat_completion_stream(
     subject: str = "math",
     mode: str = "A",
     subtitle_context: str = "",
+    model_override: str = "",
 ) -> AsyncIterator[Tuple[str, str]]:
     """流式调用主模型（thinking 模式，OpenAI 兼容端点），逐段产出：
 
@@ -111,12 +112,13 @@ async def chat_completion_stream(
         ("content", "…正文片段…")    —— 最终回答，逐字展示给用户
 
     调用方负责累积两类文本；HTTP/API 错误会以 RuntimeError 抛出。
+    model_override: 会话级模型名（非空时覆盖全局配置，用于对话框一键切模型）。
     """
     cfg = load_model_config()["main"]
     endpoint = get_endpoint(cfg.get("base_url"), "/chat/completions")
     system_prompt = _build_system_prompt(subject, mode, subtitle_context)
     payload = _completion_payload(messages, system_prompt, stream=True,
-                                  model=cfg.get("model") or "deepseek-v4-flash")
+                                  model=model_override or cfg.get("model") or "deepseek-v4-flash")
 
     headers = {
         "Authorization": f"Bearer {cfg.get('api_key') or settings.deepseek_api_key}",
@@ -156,7 +158,10 @@ async def chat_completion_stream(
 # 不因长文稀释细节）；全部段结果再合并，并要求对照各段检查遗漏。相比一次性
 # 压缩全文，分段提取 + 合并防漏能最大程度保住公式/例题/易错点等关键信息。
 
-SEGMENT_EXTRACT_PROMPT = """你是考研课程内容提取器。下面是某考研课第 {n}/{total} 段的带时间戳字幕（[mm:ss] 为该句起始时间）。
+SEGMENT_EXTRACT_PROMPT = """你是考研课程内容提取器。下面是某考研课第 {n}/{total} 段的带时间戳字幕（[mm:ss] 为该句起始时间）：
+
+字幕内容：
+{subtitle}
 
 任务：逐句扫描，提取这一段里出现的全部有效信息，宁多勿漏：
 1. 知识点/概念：名称 + 一句话解释 + 时间戳（如 [12:34]）

@@ -1,6 +1,13 @@
-"""语音识别 — 默认千问 ASR（Qwen3-ASR-Flash，支持 base64 直接上传；可配置）"""
+"""语音识别 — 支持本地 faster-whisper 与千问云 API 双 provider。
+
+provider 取值（model_config["asr"]["provider"]）：
+  - "local"（默认）：本地 faster-whisper，免费/离线，GPU 加速，给出逐句精确时间轴
+  - "qwen"：千问 qwen3-asr-flash 云 API（按 50 秒分段）
+
+本地识别失败（模型未下载 / GPU cuDNN 缺失等）会自动回退千问云，
+避免字幕"全部 failed"（此前出现过被加速器 SSL 拦截拖垮云 API 的事故）。
+"""
 import os
-import json
 import re
 import base64
 import subprocess
@@ -15,10 +22,25 @@ from ..core.model_config import load_model_config, get_endpoint
 QWEN_ASR_PATH = "/api/v1/services/aigc/multimodal-generation/generation"
 CHUNK_SEC = 50
 
+# 本地 faster-whisper 模型缓存：{size: WhisperModel}，避免每个视频重复加载模型
+_MODEL_CACHE: dict = {}
+
 
 def _asr_config():
     cfg = load_model_config()["asr"]
     return cfg, get_endpoint(cfg.get("base_url"), QWEN_ASR_PATH)
+
+
+def _asr_provider():
+    """返回 (provider, size)。provider: local/qwen；size: small/medium。"""
+    cfg = load_model_config()["asr"]
+    provider = (cfg.get("provider") or "local").strip().lower()
+    size = (cfg.get("size") or "small").strip().lower()
+    if provider not in ("local", "qwen"):
+        provider = "local"
+    if size not in ("small", "medium", "large-v3"):
+        size = "small"
+    return provider, size
 
 
 def detect_silences(audio_path: str) -> List[Tuple[float, float]]:
@@ -56,6 +78,8 @@ def audio_duration(audio_path: str) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1", audio_path,
     ], capture_output=True, text=True, timeout=30)
     return float(r.stdout.strip()) if r.stdout else 0
+
+
 def _convert_to_pcm_segments(audio_path: str, output_dir: str) -> List[Tuple[str, int]]:
     """把音频转成 16kHz WAV 并按 50 秒切分"""
     full_wav = os.path.join(output_dir, "full.wav")
@@ -133,12 +157,52 @@ async def _transcribe_chunk(audio_data: bytes) -> Optional[str]:
             raise RuntimeError(f"千问 ASR 解析失败: {result}")
 
 
-async def transcribe_audio(
-    audio_data: bytes,
-    audio_format: str = "mp3",
-) -> dict:
-    """千问 ASR 转写 + 静音检测
-    返回: {"chunks": [{"start": float, "text": str}, ...], "duration": float}
+def _get_local_model(size: str):
+    """懒加载并缓存 faster-whisper 模型（避免每个视频重复加载模型）"""
+    if size not in _MODEL_CACHE:
+        from faster_whisper import WhisperModel
+        # device="auto" 优先 GPU（RTX 4070），compute_type="auto" 自动选 fp16/int8
+        _MODEL_CACHE[size] = WhisperModel(size, device="auto", compute_type="auto")
+    return _MODEL_CACHE[size]
+
+
+def _run_local(audio_path: str, size: str) -> dict:
+    """同步执行本地识别（在后台线程里跑，不阻塞事件循环）"""
+    model = _get_local_model(size)
+    # vad_filter 自动去静音，beam_size 提升准确度，language 锁定中文
+    segments, info = model.transcribe(
+        audio_path, language="zh", vad_filter=True, beam_size=5,
+    )
+    chunks = []
+    for seg in segments:
+        text = (seg.text or "").strip()
+        if not text:
+            continue
+        chunks.append({
+            "start": round(seg.start, 2),
+            "end": round(seg.end, 2),
+            "text": text,
+        })
+    silences = detect_silences(audio_path)
+    if not chunks:
+        raise RuntimeError("本地识别无结果")
+    return {
+        "chunks": chunks,
+        "duration": getattr(info, "duration", None) or 0,
+        "silences": silences,
+        "precise": True,   # 标记：逐句精确时间轴，videos.py 据此走精确分支
+        "engine": "local",
+    }
+
+
+async def _transcribe_local(audio_path: str, size: str) -> dict:
+    """本地 faster-whisper 识别（放到后台线程，避免阻塞事件循环）"""
+    return await asyncio.to_thread(_run_local, audio_path, size)
+
+
+async def _transcribe_qwen(audio_data: bytes, audio_format: str) -> dict:
+    """千问 ASR 转写 + 静音检测（云 API，按 50 秒分段）
+    返回: {"chunks": [{"start": float, "text": str}, ...], "duration": float, "engine": "qwen"}
     start 是 50 秒段落的起始时间，text 是该段的转写结果
     """
     tmpdir = tempfile.mkdtemp()
@@ -177,7 +241,7 @@ async def transcribe_audio(
         if not chunks:
             raise RuntimeError("所有段落识别失败")
 
-        return {"chunks": chunks, "duration": dur, "silences": silences}
+        return {"chunks": chunks, "duration": dur, "silences": silences, "engine": "qwen"}
 
     except Exception as e:
         try:
@@ -187,3 +251,30 @@ async def transcribe_audio(
         except:
             pass
         raise
+
+
+async def transcribe_audio(
+    audio_data: bytes,
+    audio_format: str = "mp3",
+    audio_path: Optional[str] = None,
+) -> dict:
+    """按 provider 选择识别引擎。
+
+    provider=local：本地 faster-whisper（需 audio_path），失败自动回退千问云；
+    provider=qwen：走云 API。
+
+    返回: {"chunks":[...], "duration":..., "silences":[...], "engine": str}
+      local 的 chunks 每项含 start/end（精确时间轴，precise=True）；
+      qwen 的 chunks 是 50 秒分段（start 为段起点）。
+    """
+    provider, size = _asr_provider()
+    if provider == "local":
+        if audio_path and os.path.exists(audio_path):
+            try:
+                return await _transcribe_local(audio_path, size)
+            except Exception as e:
+                # 本地失败（模型未下载 / GPU 问题等）→ 回退云，保证字幕可用
+                print(f"[asr] 本地识别失败，回退千问云：{e}")
+        else:
+            print("[asr] provider=local 但未提供 audio_path，回退千问云")
+    return await _transcribe_qwen(audio_data, audio_format)

@@ -58,6 +58,7 @@ class ChatSession(Base):
     mode = Column(String(8), index=True, nullable=False)  # A / B / C
     subject = Column(String(20), default="math", index=True)
     name = Column(String(255), default="新对话")  # 会话名（首条提问自动命名 / 可重命名）
+    model = Column(String(120), default="")  # 会话级模型（空 = 用全局主模型配置）
     dify_conversation_id = Column(String(64), default="")  # Dify 侧 conversation_id（遗留）
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -74,6 +75,7 @@ class ChatMessage(Base):
     role = Column(String(16), nullable=False)  # user / assistant
     content = Column(Text, default="")  # 纯文本，或含图片时的 JSON 数组
     reasoning = Column(Text, default="")  # DeepSeek 思维链（下轮回填保持连续性）
+    quote = Column(Text, default="")  # 引用原文（用户引用 AI 回答某段进行特别说明）
     seq = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 

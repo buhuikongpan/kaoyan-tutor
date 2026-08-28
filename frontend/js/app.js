@@ -15,6 +15,8 @@ const state = {
     autoCapture: false,  // 自动截图当前画面
     uploadController: null,
     currentFolderId: 0,  // 当前选中的文件夹
+    convModel: '',       // 当前会话的模型（空 = 全局主模型）
+    globalModel: '',     // 全局主模型名（下拉兜底显示）
 };
 
 const API_BASE = localStorage.getItem('kaoyan_api_url') || '';
@@ -43,7 +45,7 @@ function resetViewportScroll() {
         document.body.scrollTop = 0;
     } catch (e) {}
 }
-document.addEventListener('DOMContentLoaded', () => { resetViewportScroll(); switchMode('A'); setupSplitters(); initConvResizer(); restoreConvSidebarState(); loadTree().then(() => restoreActiveConversation()); });
+document.addEventListener('DOMContentLoaded', () => { resetViewportScroll(); switchMode('A'); setupSplitters(); initConvResizer(); restoreConvSidebarState(); loadChatModelList(); loadTree().then(() => restoreActiveConversation()); });
 
 // 终极兜底：任何时刻 document 被滚动（滚动锚定/浏览器内部行为），立即拉回顶部。
 // 用 capture 阶段监听，抢在浏览器完成滚动渲染前复位，防止顶部导航被顶出屏幕、视频滚出视口后黑屏。
@@ -118,6 +120,7 @@ function setupSplitters() {
 function switchSubject(subject) {
     state.subject = subject;
     state.conversationId = '';
+    state.convModel = '';
     state.messages = [];
     state.subtitles = [];
     state.currentFolderId = 0;
@@ -132,6 +135,7 @@ function switchSubject(subject) {
 function switchMode(mode) {
     state.mode = mode;
     state.conversationId = '';
+    state.convModel = '';
     state.messages = [];
     document.querySelectorAll('.mode-tab').forEach(el => el.classList.toggle('active', el.dataset.mode === mode));
     const names = { A: '💬 即时问答', B: '🎯 引导输出', C: '📝 课后问答' };
@@ -152,6 +156,9 @@ let treeExpanded = {};  // {folderId: true/false}
 // JS 加载成功就立即清除 HTML 中的占位文本
 try { const el = document.getElementById('pageLoadCheck'); if (el) el.textContent = '✅ JS 已加载'; } catch(e) {}
 
+// 树数据缓存：供搜索过滤时快速重渲染（不用重新请求后端）
+let treeCache = null;
+
 async function loadTree() {
     const container = document.getElementById('videoTreeBody');
     if (!container) { console.error('videoTreeBody not found'); return; }
@@ -162,60 +169,100 @@ async function loadTree() {
         const resp = await apiFetch(`/api/folders/tree?subject=${state.subject}`);
         if (!resp.ok) throw new Error('网络错误');
         const data = await resp.json();
-        if (!data.folders.length && !data.uncategorized.length) {
-            container.innerHTML = `<div class="empty-state"><div class="icon">📂</div><div>暂无视频</div></div>`;
-            return;
-        }
-        container.innerHTML = '';
-        // 渲染文件夹
-        for (const f of data.folders) {
-            container.appendChild(renderFolderNode(f, 0));
-        }
-        // 未分类视频
-        if (data.uncategorized.length) {
-            const ucDiv = document.createElement('div');
-            ucDiv.className = 'tree-folder';
-            ucDiv.innerHTML = `<div class="tree-folder-label" onclick="toggleFolder(this)">
-                <span class="tree-arrow">▶</span><span class="tree-icon">📁</span><span>未分类</span><span class="tree-count">${data.uncategorized.length}</span>
-            </div><div class="tree-children" style="display:none">`;
-            for (const v of data.uncategorized) {
-                ucDiv.querySelector('.tree-children').appendChild(makeVideoNode(v));
-            }
-            container.appendChild(ucDiv);
-        }
-        // 若存在生成中的课程总结，20 秒后自动刷新一次树状态（后台任务完成时能跟上）
-        if (container.querySelector('.status-summary-processing')) {
-            clearTimeout(window._summaryPollTimer);
-            window._summaryPollTimer = setTimeout(() => loadTree(), 20000);
-        }
+        treeCache = data;
+        renderTree(data, getTreeFilter());
     } catch (err) {
         container.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><div>${err.message}</div></div>`;
     }
 }
 
-function renderFolderNode(f, depth) {
+function getTreeFilter() {
+    const el = document.getElementById('videoSearch');
+    return (el && el.value ? el.value.trim().toLowerCase() : '');
+}
+
+function treeVideoMatches(v, q) {
+    if (!q) return true;
+    const hay = ((v.title || '') + ' ' + (v.filename || '')).toLowerCase();
+    return hay.includes(q);
+}
+
+function renderTree(data, q) {
+    const container = document.getElementById('videoTreeBody');
+    if (!container) return;
+    if (!data.folders.length && !data.uncategorized.length) {
+        container.innerHTML = `<div class="empty-state"><div class="icon">📂</div><div>暂无视频</div></div>`;
+        return;
+    }
+    container.innerHTML = '';
+    let shown = 0;
+    // 渲染文件夹（搜索时无匹配的整棵隐藏）
+    for (const f of data.folders) {
+        const node = renderFolderNode(f, 0, q);
+        if (node) { container.appendChild(node); shown++; }
+    }
+    // 未分类视频（搜索时同样过滤）
+    const uc = (data.uncategorized || []).filter(v => treeVideoMatches(v, q));
+    if (uc.length) {
+        const ucDiv = document.createElement('div');
+        ucDiv.className = 'tree-folder';
+        ucDiv.innerHTML = `<div class="tree-folder-label" onclick="toggleFolder(this)">
+            <span class="tree-arrow">▶</span><span class="tree-icon">📁</span><span>未分类</span><span class="tree-count">${uc.length}</span>
+        </div><div class="tree-children" style="display:none">`;
+        for (const v of uc) ucDiv.querySelector('.tree-children').appendChild(makeVideoNode(v));
+        container.appendChild(ucDiv);
+        shown++;
+    }
+    if (!shown) {
+        container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><div>没有匹配「${q}」的视频</div></div>`;
+        return;
+    }
+    // 若存在生成中的课程总结，20 秒后自动刷新一次树状态（后台任务完成时能跟上）
+    if (container.querySelector('.status-summary-processing')) {
+        clearTimeout(window._summaryPollTimer);
+        window._summaryPollTimer = setTimeout(() => loadTree(), 20000);
+    }
+}
+
+function onVideoSearch(v) {
+    if (!treeCache) return;
+    renderTree(treeCache, (v || '').trim().toLowerCase());
+}
+
+function renderFolderNode(f, depth, q) {
+    const isExpanded = treeExpanded[f.id] === true;
+    const expand = isExpanded || !!q;   // 搜索时强制展开
+    // 先收集匹配内容：无匹配的文件夹整体隐藏（搜索态）
+    const childNodes = [];
+    let match = 0;
+    for (const c of (f.children || [])) {
+        const node = renderFolderNode(c, depth + 1, q);
+        if (node) { childNodes.push(node); match++; }
+    }
+    const videos = (f.videos || []).filter(v => treeVideoMatches(v, q));
+    match += videos.length;
+    if (q && !match) return null;
+
     const div = document.createElement('div');
     div.className = 'tree-folder';
-    const isExpanded = treeExpanded[f.id] === true;
-    const hasChildren = f.children && f.children.length;
-    const hasVideos = f.videos && f.videos.length;
-    const arrow = (hasChildren || hasVideos) ? (isExpanded ? '▼' : '▶') : '';
+    const hasAny = (f.children && f.children.length) || (f.videos && f.videos.length);
+    const arrow = hasAny ? (expand ? '▼' : '▶') : '';
 
     div.innerHTML = `<div class="tree-folder-label" style="padding-left:${depth*16+4}px" onclick="toggleFolder(this)" data-fid="${f.id}">
         <span class="tree-arrow">${arrow}</span>
         <span class="tree-icon">📂</span>
         <span class="tree-fname">${escHtml(f.name)}</span>
-        <span class="tree-count">${hasVideos ? f.videos.length : ''}</span>
+        <span class="tree-count">${hasAny ? videos.length : ''}</span>
         <span class="tree-ctx" onclick="event.stopPropagation();renameFolder(${f.id})" title="重命名">✏️</span>
         <span class="tree-ctx" onclick="event.stopPropagation();deleteFolder(${f.id})" title="删除">🗑️</span>
     </div>`;
     const childrenDiv = document.createElement('div');
     childrenDiv.className = 'tree-children';
-    childrenDiv.style.display = isExpanded ? 'block' : 'none';
+    childrenDiv.style.display = expand ? 'block' : 'none';
     // 子文件夹
-    if (hasChildren) for (const c of f.children) childrenDiv.appendChild(renderFolderNode(c, depth + 1));
+    for (const c of childNodes) childrenDiv.appendChild(c);
     // 视频
-    if (hasVideos) for (const v of f.videos) childrenDiv.appendChild(makeVideoNode(v, depth + 1));
+    for (const v of videos) childrenDiv.appendChild(makeVideoNode(v, depth + 1));
     div.appendChild(childrenDiv);
     return div;
 }
@@ -225,13 +272,16 @@ function makeVideoNode(v, depth = 0) {
     item.className = `tree-video${v.id === state.currentVideoId ? ' active' : ''}`;
     item.dataset.videoId = v.id;
     const labels = { pending: '待处理', processing: '提取中', done: '已识别', failed: '失败' };
-    // 课程总结状态：📄 点击查看 / 生成中 / 失败可重试（无总结不显示）
-    const sLabels = { done: '📄', processing: '⏳总结', failed: '📄重试', none: '', pending: '' };
+    // 课程总结状态：📄 点击查看 / 生成中 / 失败可重试 / 无总结（字幕就绪）可手动生成
+    const sLabels = { done: '📄', processing: '⏳', failed: '📄重试', none: '📄生成', pending: '📄生成' };
     const sTitle = {
-        done: '查看课程总结', processing: '总结生成中', failed: '重新生成总结', none: '', pending: '',
+        done: '查看课程总结', processing: '总结生成中', failed: '重新生成总结',
+        none: '生成课程总结（字幕已就绪）', pending: '生成课程总结（字幕已就绪）',
     };
     const sAction = v.summary_status === 'done' ? `viewSummary(${v.id})`
-        : v.summary_status === 'failed' ? `generateSummary(${v.id})` : '';
+        : v.summary_status === 'failed' ? `generateSummary(${v.id})`
+        : (v.summary_status === 'none' || v.summary_status === 'pending')
+            && v.subtitle_status === 'done' ? `generateSummary(${v.id})` : '';
     const checked = (state.mode === 'B' && sessionStorage.getItem('b_video_'+v.id) === '1') ? 'checked' : '';
     item.innerHTML = `<div class="tree-video-label" style="padding-left:${depth*16+4}px">
         <input type="checkbox" class="b-video-cb" data-video="${v.id}" ${checked} style="display:none" onchange="onBCheckChange(${v.id}, this)">
@@ -261,46 +311,85 @@ function toggleFolder(el) {
 
 // ===== 文件夹 CRUD =====
 function showNewFolderDialog() {
-    const name = prompt('新建文件夹名称：');
-    if (!name) return;
-    apiFetch('/api/folders/create', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({subject: state.subject, name: name.trim()}),
-    }).then(r => { if(r.ok) loadTree(); else r.json().then(d => alert(d.detail)); });
+    openDialog({
+        title: '📂 新建文件夹',
+        bodyHTML: '<label>文件夹名称</label><input type="text" id="dlgFolderName" maxlength="255" placeholder="如：第6讲 中值定理">',
+        okText: '创建',
+        onOk: () => {
+            const name = document.getElementById('dlgFolderName').value.trim();
+            if (!name) { addSystemMessage('⚠️ 名称不能为空'); return; }
+            apiFetch('/api/folders/create', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({subject: state.subject, name: name}),
+            }).then(r => {
+                closeDialog();
+                if (r.ok) loadTree();
+                else r.json().then(d => addSystemMessage(`⚠️ ${d.detail || '创建失败'}`));
+            });
+        },
+    });
 }
 
 function renameFolder(id) {
-    const name = prompt('新名称：');
-    if (!name) return;
-    apiFetch(`/api/folders/${id}/rename`, {
-        method: 'PUT', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({name: name.trim()}),
-    }).then(r => { if(r.ok) loadTree(); });
+    openDialog({
+        title: '✏️ 重命名文件夹',
+        bodyHTML: '<label>新名称</label><input type="text" id="dlgFolderName" maxlength="255" placeholder="输入新名称">',
+        okText: '保存',
+        onOk: () => {
+            const name = document.getElementById('dlgFolderName').value.trim();
+            if (!name) { addSystemMessage('⚠️ 名称不能为空'); return; }
+            apiFetch(`/api/folders/${id}/rename`, {
+                method: 'PUT', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({name: name}),
+            }).then(r => {
+                closeDialog();
+                if (r.ok) loadTree();
+                else r.json().then(d => addSystemMessage(`⚠️ ${d.detail || '重命名失败'}`));
+            });
+        },
+    });
 }
 
 function deleteFolder(id) {
-    if (!confirm('删除文件夹？视频会移回未分类。')) return;
-    apiFetch(`/api/folders/${id}`, {method:'DELETE'})
-        .then(r => { if(r.ok) loadTree(); });
+    openDialog({
+        title: '🗑️ 删除文件夹',
+        bodyHTML: '<div class="dialog-warn">删除文件夹后，其中的视频会移回「未分类」，<b>视频文件不会被删除</b>。确定继续吗？</div>',
+        okText: '删除',
+        onOk: () => {
+            apiFetch(`/api/folders/${id}`, {method:'DELETE'})
+                .then(r => { closeDialog(); if (r.ok) loadTree(); });
+        },
+    });
 }
 
-function moveVideoDialog(videoId) {
-    // 获取文件夹列表供选择
-    apiFetch(`/api/folders/tree?subject=${state.subject}`)
-        .then(r => r.json()).then(data => {
-            const names = ['未分类'];
-            const ids = [0];
-            function walk(fs) {
-                for (const f of fs) { names.push(f.name); ids.push(f.id); walk(f.children || []); }
+async function moveVideoDialog(videoId) {
+    // 获取文件夹列表供选择（页内下拉，不再手输 ID）
+    try {
+        const resp = await apiFetch(`/api/folders/tree?subject=${state.subject}`);
+        if (!resp.ok) throw new Error('加载文件夹失败');
+        const data = await resp.json();
+        let html = '<label>移动到：</label><select id="dlgMoveTarget">';
+        html += '<option value="0">（未分类）</option>';
+        (function walk(fs, d) {
+            for (const f of fs) {
+                html += `<option value="${f.id}">${'　'.repeat(d)}${f.name}</option>`;
+                walk(f.children || [], d + 1);
             }
-            walk(data.folders);
-            const choice = prompt(`移动到哪个文件夹？\n0: 未分类\n${ids.map((id,i) => i>0 ? `${id}: ${names[i]}` : '').filter(Boolean).join('\n')}\n\n输入文件夹ID：`);
-            if (choice === null) return;
-            const fid = parseInt(choice);
-            if (isNaN(fid)) return;
-            apiFetch(`/api/folders/${videoId}/move?folder_id=${fid}`, {method:'PUT'})
-                .then(r => { if(r.ok) loadTree(); });
+        })(data.folders || [], 1);
+        html += '</select>';
+        openDialog({
+            title: '📂 移动视频',
+            bodyHTML: html,
+            okText: '移动',
+            onOk: () => {
+                const fid = parseInt(document.getElementById('dlgMoveTarget').value || '0', 10);
+                apiFetch(`/api/folders/${videoId}/move?folder_id=${fid}`, {method:'PUT'})
+                    .then(r => { closeDialog(); if (r.ok) loadTree(); });
+            },
         });
+    } catch (e) {
+        addSystemMessage(`⚠️ ${e.message}`);
+    }
 }
 
 // ===== 播放视频 =====
@@ -315,10 +404,20 @@ async function playVideo(videoId) {
     const tk = getApiToken();
     video.src = getApiUrl(`/api/videos/stream/${videoId}`) + (tk ? `?token=${encodeURIComponent(tk)}` : '');
 
+    // 读取上次播放进度（续播：进度是每 5 秒落一次 localStorage）
+    let savedPos = 0;
+    try { savedPos = parseFloat(localStorage.getItem('kaoyan_progress_' + videoId) || '0') || 0; } catch (e) {}
+
     // 等待视频元数据加载成功后再切换显示状态（防鉴权失败/文件不存在导致黑屏）
     video.onloadedmetadata = () => {
         placeholder.style.display = 'none';
         video.style.display = 'block';
+        if (savedPos > 10 && isFinite(video.duration) && savedPos < video.duration - 10) {
+            video.currentTime = savedPos;
+            addSystemMessage(`⏩ 已从上次位置 ${fmtTime(savedPos)} 继续播放`);
+        } else if (savedPos > 2) {
+            video.currentTime = savedPos;
+        }
         video.play();
         video.onerror = null; // 成功加载后移除错误处理器
     };
@@ -335,6 +434,13 @@ async function playVideo(videoId) {
     if (state.mode === 'A') document.getElementById('subtitlePanel').style.display = 'flex';
     addSystemMessage(`🎬 播放中`);
 }
+
+// 播放完清掉进度记忆，下次重新从开头播
+document.getElementById('videoPlayer').addEventListener('ended', () => {
+    try {
+        if (state.currentVideoId) localStorage.removeItem('kaoyan_progress_' + state.currentVideoId);
+    } catch (e) {}
+});
 
 function resetPlayer() {
     const video = document.getElementById('videoPlayer');
@@ -640,11 +746,46 @@ function extractSubtitle(videoId) {
 }
 
 async function deleteVideo(videoId) {
-    if (!confirm('确定删除？')) return;
+    openDialog({
+        title: '🗑️ 删除视频',
+        bodyHTML: '<div class="dialog-warn">将删除该视频文件及其字幕/总结记录，<b>不可恢复</b>。确定继续吗？</div>',
+        okText: '删除',
+        onOk: () => {
+            apiFetch(`/api/videos/${videoId}`, {method:'DELETE'}).then(r => {
+                closeDialog();
+                if (state.currentVideoId === videoId) resetPlayer();
+                loadTree();
+            });
+        },
+    });
+}
+
+// ===== 重新扫描本地目录（找回手动放入 storage/videos 的视频）=====
+async function rescanVideos() {
+    addSystemMessage('🔎 正在扫描本地视频目录...');
     try {
-        await apiFetch(`/api/videos/${videoId}`, {method:'DELETE'});
-        if (state.currentVideoId === videoId) resetPlayer();
+        const resp = await apiFetch('/api/videos/rescan', { method: 'POST' });
+        const d = await resp.json().catch(() => ({}));
+        addSystemMessage(d.message || (resp.ok ? '✅ 扫描完成' : `⚠️ 扫描失败（${resp.status}）`));
         loadTree();
+    } catch (err) { addSystemMessage(`⚠️ 扫描失败：${err.message}`); }
+}
+
+// ===== 一键补生成课程总结（存量的字幕已完成但无总结的视频）=====
+async function batchSummaries() {
+    try {
+        const resp = await apiFetch('/api/videos/batch-summary', { method: 'POST' });
+        const d = await resp.json().catch(() => ({}));
+        if (!resp.ok) { addSystemMessage(`⚠️ ${d.detail || '批量生成失败'}`); return; }
+        addSystemMessage(d.message || `✅ 已开始批量生成（${d.queued} 个视频）`);
+        loadTree();
+        // 后台正在生成时轻量轮询树状态（有 ⏳ 徽标即每 15 秒刷新，结束自动停）
+        const poll = () => {
+            if (!document.querySelector('.status-summary-processing')) return;
+            loadTree();
+            setTimeout(poll, 15000);
+        };
+        setTimeout(poll, 10000);
     } catch (err) { addSystemMessage(`⚠️ ${err.message}`); }
 }
 
@@ -699,13 +840,18 @@ async function sendMessage() {
     if ((!text && !state.currentImage) || state.isStreaming) return;
     const displayText = text || '[查看图片]';
     input.value = '';
-    addUserMessage(displayText, state.currentImage);
+    addUserMessage(displayText, state.currentImage, quoteState ? quoteState.text : '');
     document.getElementById('btnSend').disabled = true;
     state.isStreaming = true;
     let typingId = showTyping();  // 思考期间显示"打字中"
     let streamingEl = null;       // 流式正文字泡（SSE 到达后接管）
     let streamingContent = null;
     let lastRender = 0;
+    // ---- 思考静默心跳：提升到 try 外，异常路径也能安全清理 ----
+    let thinkingTimer = null;     // 500ms 心跳：更新"已用时"计时 + 判定静默
+    const stopThinkingTimer = () => {
+        if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+    };
     try {
         // A模式 + 视频播放中 + 自动截图开 → 捕获当前帧
         let captureBlob = null;
@@ -725,8 +871,9 @@ async function sendMessage() {
         fd.append('query', text || '分析图片');
         fd.append('subject', state.subject);
         fd.append('mode', state.mode);
-        fd.append('subtitle_context', state.mode === 'A' ? getModeASubtitleContext() : '');
+        fd.append('subtitle_context', state.mode === 'A' ? await getModeASubtitleContext() : '');
         fd.append('conversation_id', state.conversationId);
+        if (quoteState && quoteState.text) fd.append('quote', JSON.stringify({ text: quoteState.text }));
         if (state.mode === 'B') fd.append('watched_video_ids', JSON.stringify(getSelectedBVideos()));
         if (state.currentImage) {
             fd.append('image', state.currentImageFile);
@@ -749,6 +896,7 @@ async function sendMessage() {
         streamingEl.innerHTML = `
             <div class="reasoning-block" style="display:none">
                 <div class="reasoning-header" onclick="toggleReasoning(this)"><span class="reasoning-arrow">▶</span><span class="reasoning-title">🧠 深度思考中...</span></div>
+                <div class="reasoning-idle" style="display:none"><span class="spinner"></span><span class="idle-text">💭 正在深入思考…</span></div>
                 <div class="reasoning-body"></div>
             </div>
             <div class="msg-content"></div><div class="msg-time"></div>`;
@@ -756,6 +904,7 @@ async function sendMessage() {
         const reasoningBlock = streamingEl.querySelector('.reasoning-block');
         const reasoningBody = streamingEl.querySelector('.reasoning-body');
         const reasoningTitle = streamingEl.querySelector('.reasoning-title');
+        const reasoningIdleEl = streamingEl.querySelector('.reasoning-idle');
         document.getElementById('chatMessages').appendChild(streamingEl);
 
         const reader = resp.body.getReader();
@@ -766,8 +915,52 @@ async function sendMessage() {
         let reasoningStarted = false;
         let contentStarted = false;
         let reasoningLastRender = 0;
+        // ---- 思考反馈：上游 API 首 token 前常静默很久，用计时/动画让用户知道一直在干活 ----
+        const IDLE_THRESHOLD_MS = 2500;   // 思考期静默阈值（有 reasoning 后）
+        const WAIT_THRESHOLD_MS = 2500;   // 等待首个 token 阈值（发送后）
+        let reasoningStartedAt = 0;       // 思考开始时间（用于标题"已用时"）
+        let lastReasoningAt = 0;          // 最近一次收到 reasoning token 的时间
+        let reasoningIdle = false;        // 思考期是否处于静默提示态
+        let streamStartTime = 0;          // 进入流式（创建 streamingEl）时刻
+        let reasoningBlockShown = false;  // 等待期是否已把思考块显示出来
+        const idleTextEl = reasoningBlock.querySelector('.idle-text');
+        const startThinkingTimer = () => {
+            if (thinkingTimer) return;
+            thinkingTimer = setInterval(() => {
+                const now = Date.now();
+                const setLabel = (t) => { if (reasoningTitle.textContent !== t) reasoningTitle.textContent = t; };
+                const setIdleText = (t) => { if (idleTextEl.textContent !== t) idleTextEl.textContent = t; };
+                // 阶段1：还没收到任何 token —— 等待模型首个输出（最常见的长静默在这里）
+                if (!reasoningStarted && !contentStarted) {
+                    const waited = now - streamStartTime;
+                    if (waited > WAIT_THRESHOLD_MS) {
+                        if (!reasoningBlockShown) {
+                            reasoningBlockShown = true;
+                            reasoningBlock.style.display = '';
+                            reasoningIdleEl.style.display = '';
+                            setLabel('🧠 深度思考中…');
+                        }
+                        setIdleText(`⏳ 正在等待模型响应…（已等待 ${Math.round(waited / 1000)}s）`);
+                    }
+                    return;
+                }
+                if (contentStarted) return; // 正文开始后由收尾/collapseReasoning 清理
+                // 阶段2：思考中 —— 静默判定 + 已用时计时
+                const idle = now - lastReasoningAt > IDLE_THRESHOLD_MS;
+                if (idle !== reasoningIdle) {
+                    reasoningIdle = idle;
+                    reasoningIdleEl.style.display = idle ? '' : 'none';
+                }
+                if (reasoningIdle) setIdleText('💭 正在深入思考…');
+                const secs = Math.round((now - reasoningStartedAt) / 1000);
+                setLabel(`🧠 深度思考中…（已用时 ${secs}s）`);
+            }, 500);
+        };
         let sseError = '';
         let done = false;
+        // 进入流式即启动心跳：覆盖"等待首个 token"的静默期
+        streamStartTime = Date.now();
+        startThinkingTimer();
 
         const renderReasoningThrottled = () => {
             const now = Date.now();
@@ -790,6 +983,8 @@ async function sendMessage() {
         // 正文开始后：思考块收起为一行，可点击展开
         const collapseReasoning = () => {
             if (!reasoningStarted) return;
+            stopThinkingTimer();
+            reasoningIdleEl.style.display = 'none';
             reasoningBlock.classList.add('collapsed');
             reasoningTitle.textContent = '🧠 已深度思考（点击展开）';
             streamingEl.querySelector('.reasoning-arrow').textContent = '▶';
@@ -813,13 +1008,24 @@ async function sendMessage() {
                         // 思维链实时展示（独立于正文，不混入回答）
                         if (!reasoningStarted) {
                             reasoningStarted = true;
+                            reasoningStartedAt = Date.now();
+                            lastReasoningAt = reasoningStartedAt;
                             reasoningBlock.style.display = '';
+                            // 撤掉"等待响应"提示：有思考内容了，转文字滚动
+                            reasoningIdleEl.style.display = 'none';
                         }
                         reasoningText += obj.text;
+                        lastReasoningAt = Date.now();
+                        // 恢复输出：立即撤掉静默提示（不等下一次心跳）
+                        if (reasoningIdle) {
+                            reasoningIdle = false;
+                            reasoningIdleEl.style.display = 'none';
+                        }
                         renderReasoningThrottled();
                     } else if (obj.type === 'delta' && obj.text) {
                         if (!contentStarted) {
                             contentStarted = true;
+                            stopThinkingTimer();  // 正文开始，停心跳（无论是否走过思考）
                             collapseReasoning();
                         }
                         raw += obj.text;
@@ -827,6 +1033,7 @@ async function sendMessage() {
                     } else if (obj.type === 'done') {
                         state.conversationId = obj.conversation_id;
                         saveActiveConv();
+                        clearQuote();  // 发送成功，撤销引用条
                         done = true;
                     } else if (obj.type === 'error') {
                         sseError = obj.detail || 'AI 调用失败';
@@ -835,7 +1042,8 @@ async function sendMessage() {
             }
         }
 
-        // 收尾：强制渲染最终稿 + 时间戳
+        // 收尾：停止思考心跳，强制渲染最终稿 + 时间戳
+        stopThinkingTimer();
         if (streamingContent) {
             streamingContent.innerHTML = renderMath(escHtml(raw));
             streamingEl.querySelector('.msg-time').textContent = time();
@@ -856,6 +1064,7 @@ async function sendMessage() {
         }
         if (state.conversationId) loadConversations();
     } catch (err) {
+        stopThinkingTimer();
         if (typingId) removeTyping(typingId);
         if (streamingEl) streamingEl.remove();
         addSystemMessage(`⚠️ ${err.message}`);
@@ -923,7 +1132,7 @@ document.addEventListener('paste', function(e) {
     }
 });
 
-function getModeASubtitleContext() {
+async function getModeASubtitleContext() {
     // 模式A上下文 = 整讲字幕全文 + 当前播放位置。
     // 一节视频的字幕仅 1~1.5 万 token（中文 ~1.2 token/字），对 DeepSeek
     // 的大上下文毫无压力；数学讲解前后依赖强（前 30 分钟定理后 30 分钟引用），
@@ -934,6 +1143,22 @@ function getModeASubtitleContext() {
     const t = (video && typeof video.currentTime === 'number') ? video.currentTime : 0;
     const d = (video && typeof video.duration === 'number' && isFinite(video.duration)) ? video.duration : 0;
     const pos = `${fmtTime(t)} / ${fmtTime(d)}`;
+    // ⚡ 精简模式（设置页勾选）：课程总结 + 当前位置前后 ±10 分钟字幕，回答更快更省
+    if (isCompactASubjectCtx() && state.currentVideoId) {
+        const WIN = 600;   // ±10 分钟
+        let summaryText = '';
+        try {
+            const resp = await apiFetch(`/api/videos/${state.currentVideoId}/summary`);
+            const sd = await resp.json().catch(() => ({}));
+            if (resp.ok && sd.status === 'done' && sd.content) summaryText = sd.content.trim();
+        } catch (e) {}
+        const excerpt = state.subtitles
+            .filter(s => s.start >= t - WIN && s.start <= t + WIN)
+            .map(s => (s.text || '')).filter(Boolean).join(' ');
+        const summaryPart = summaryText ? `\n【课程总结】\n${summaryText}` : '';
+        const nearPart = excerpt ? `\n【当前位置附近字幕】\n${excerpt}` : '';
+        return `【当前播放位置：${pos}】${summaryPart}${nearPart}`;
+    }
     const full = state.subtitles.map(s => (s && s.text) || '').filter(Boolean).join(' ');
     return `【当前播放位置：${pos}】 ${full}`;
 }
@@ -954,8 +1179,9 @@ function removeImage() { state.currentImage=null; state.currentImageFile=null;
     document.getElementById('imagePreview').style.display='none'; }
 
 // ===== 消息渲染 =====
-function addUserMessage(text, img) {
+function addUserMessage(text, img, quote) {
     let html = `<div class="message user">`;
+    if (quote && quote.trim()) html += `<div class="quote-bubble">📎 引用：${escHtml(quote)}</div>`;
     if (img) html += `<div class="msg-content"><img src="${img}" class="chat-img" onload="scrollChat()"><br>${escHtml(text)}</div>`;
     else html += `<div class="msg-content">${escHtml(text)}</div>`;
     html += `<div class="msg-time">${time()}</div></div>`;
@@ -1025,6 +1251,7 @@ async function loadConversations() {
                 const active = c.conversation_id === state.conversationId ? ' active' : '';
                 html += `<div class="conv-item${active}" onclick="selectConversation('${c.conversation_id}')" title="${escHtml(c.name)}">`
                       + `<span class="conv-name">${escHtml(c.name)}</span>`
+                      + `${c.model ? `<span class="conv-model-tag" title="会话模型：${escHtml(c.model)}">${escHtml(c.model)}</span>` : ''}`
                       + `<span class="conv-count">${c.message_count}</span>`
                       + `<span class="conv-ops" onclick="event.stopPropagation()">`
                       + `<button class="conv-op" onclick="renameConversation('${c.conversation_id}')" title="重命名">✏️</button>`
@@ -1086,6 +1313,8 @@ async function newConversation() {
         if (!resp.ok) throw new Error('创建失败');
         const d = await resp.json();
         state.conversationId = d.conversation_id;
+        state.convModel = '';
+        syncChatModelSelect();
         saveActiveConv();
         clearChat();
         document.querySelectorAll('.b-video-cb').forEach(cb => cb.checked=false);
@@ -1102,12 +1331,16 @@ async function selectConversation(convId) {
         const resp = await apiFetch(`/api/chat/${convId}/history`);
         if (!resp.ok) throw new Error('加载失败');
         const d = await resp.json();
+        state.convModel = d.model || '';   // 会话级模型（历史会话恢复时下拉对齐）
+        syncChatModelSelect();
         // 一次性拼出全部 HTML 再写入 DOM，避免逐步 append 触发滚动锚定
         const box = document.getElementById('chatMessages');
         let html = '';
         for (const msg of d.messages) {
+            const qBlock = (msg.quote && msg.quote.trim())
+                ? `<div class="quote-bubble">📎 引用：${escHtml(msg.quote)}</div>` : '';
             if (msg.role === 'user') {
-                html += `<div class="message user"><div class="msg-content">${escHtml(msg.content)}</div><div class="msg-time">${time()}</div></div>`;
+                html += `<div class="message user">${qBlock}<div class="msg-content">${escHtml(msg.content)}</div><div class="msg-time">${time()}</div></div>`;
             } else if (msg.role === 'assistant') {
                 // 历史消息带思维链时显示折叠的思考块（点击可展开）
                 const rBlock = (msg.reasoning && msg.reasoning.trim())
@@ -1125,28 +1358,256 @@ async function selectConversation(convId) {
 }
 
 async function renameConversation(convId) {
-    const name = prompt('输入新名称：');
-    if (name === null || !name.trim()) return;
-    try {
-        const resp = await apiFetch(`/api/chat/conversations/${convId}?name=${encodeURIComponent(name.trim())}`, {method:'PATCH'});
-        if (!resp.ok) throw new Error('重命名失败');
-        loadConversations();
-    } catch(e){ alert(e.message); }
+    openDialog({
+        title: '✏️ 重命名对话',
+        bodyHTML: '<label>输入新名称</label><input type="text" id="dlgConvName" maxlength="255" placeholder="给这个对话起个名字">',
+        okText: '保存',
+        onOk: () => {
+            const name = document.getElementById('dlgConvName').value.trim();
+            if (!name) { addSystemMessage('⚠️ 名称不能为空'); return; }
+            apiFetch(`/api/chat/conversations/${convId}?name=${encodeURIComponent(name)}`, {method:'PATCH'})
+                .then(r => {
+                    closeDialog();
+                    if (r.ok) loadConversations();
+                    else r.json().then(d => addSystemMessage(`⚠️ ${d.detail || '重命名失败'}`));
+                });
+        },
+    });
 }
 
 async function deleteConversation(convId) {
-    if (!confirm('确定删除这个对话及其全部消息？')) return;
-    try {
-        const resp = await apiFetch(`/api/chat/conversations/${convId}`, {method:'DELETE'});
-        if (!resp.ok) throw new Error('删除失败');
-        if (state.conversationId === convId) newConversation();
-        else loadConversations();
-    } catch(e){ alert(e.message); }
+    openDialog({
+        title: '🗑️ 删除对话',
+        bodyHTML: '<div class="dialog-warn">将删除这个对话及其全部消息，<b>不可恢复</b>。确定继续吗？</div>',
+        okText: '删除',
+        onOk: () => {
+            apiFetch(`/api/chat/conversations/${convId}`, {method:'DELETE'}).then(r => {
+                closeDialog();
+                if (r.ok) {
+                    if (state.conversationId === convId) newConversation();
+                    else loadConversations();
+                }
+            });
+        },
+    });
 }
 
 async function restoreActiveConversation() {
     const convId = loadActiveConv();
     if (convId) await selectConversation(convId);
+}
+
+// ===== 引用（选中 AI 回答某段 → 悬浮按钮 → 引用条 → 发送特别说明） =====
+let quoteState = null;   // {text: '...'}
+let quoteFloater = null; // 悬浮"引用"按钮元素
+
+function quoteFloaterEl() {
+    if (quoteFloater) return quoteFloater;
+    quoteFloater = document.createElement('div');
+    quoteFloater.id = 'quoteFloater';
+    quoteFloater.className = 'quote-floater';
+    quoteFloater.style.display = 'none';
+    quoteFloater.innerHTML = '<button type="button" onclick="applyQuote()">💬 引用</button>';
+    document.body.appendChild(quoteFloater);
+    return quoteFloater;
+}
+
+// 鼠标抬起：若在 AI 回答块内选中了文字，显示悬浮"引用"按钮
+document.addEventListener('mouseup', (e) => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) { hideQuoteFloater(); return; }
+    const text = (sel.toString() || '').trim();
+    if (!text) { hideQuoteFloater(); return; }
+    // 选区锚点需落在 AI 回答内容里（reasoning 思考块不参与）
+    let node = sel.anchorNode;
+    const inAssistant = node && node.nodeType === 3 ? node.parentElement : node;
+    const msgEl = inAssistant ? inAssistant.closest('.message.assistant') : null;
+    if (!msgEl || !msgEl.querySelector('.msg-content') || !msgEl.querySelector('.msg-content').contains(inAssistant)) {
+        hideQuoteFloater(); return;
+    }
+    try {
+        const rect = sel.getRangeAt(0).getBoundingClientRect();
+        if (!rect || !rect.width && !rect.height) { hideQuoteFloater(); return; }
+        const f = quoteFloaterEl();
+        f.style.display = '';
+        let left = rect.right + 8;
+        let top = rect.bottom + 8;
+        if (left + 90 > window.innerWidth) left = rect.left - 100;
+        if (top + 34 > window.innerHeight) top = rect.top - 40;
+        f.style.left = left + 'px';
+        f.style.top = top + 'px';
+        f.dataset.text = text;
+    } catch (err) { hideQuoteFloater(); }
+});
+document.addEventListener('mousedown', (e) => {
+    if (quoteFloater && !quoteFloater.contains(e.target)) hideQuoteFloater();
+});
+
+function hideQuoteFloater() {
+    if (quoteFloater) quoteFloater.style.display = 'none';
+}
+
+function applyQuote() {
+    const text = quoteFloater ? (quoteFloater.dataset.text || '') : '';
+    if (!text) return;
+    quoteState = { text: text.slice(0, 500) };
+    document.getElementById('quoteBar').style.display = '';
+    document.getElementById('quoteBarText').textContent =
+        `引用了回答：「${quoteState.text.length > 80 ? quoteState.text.slice(0, 80) + '…' : quoteState.text}」`;
+    hideQuoteFloater();
+    // 清理选区，聚焦输入框等待补充说明
+    try { window.getSelection().removeAllRanges(); } catch (e) {}
+    document.getElementById('chatInput').focus();
+}
+
+function clearQuote() {
+    quoteState = null;
+    const bar = document.getElementById('quoteBar');
+    if (bar) bar.style.display = 'none';
+}
+
+// ===== 会话级模型一键切换（当前 API Key 下可用模型列表，仅本会话生效） =====
+let chatModels = [];        // 可用模型列表缓存
+let chatModelLoaded = false;
+function chatModelSel() { return document.getElementById('chatModelSelect'); }
+
+async function loadChatModelList() {
+    try {
+        const resp = await apiFetch('/api/config/chat-models', { method: 'POST' });
+        const d = await resp.json().catch(() => ({}));
+        chatModels = d.models || [];
+        state.globalModel = d.current || '';
+        const sel = chatModelSel();
+        if (!sel) return;
+        sel.innerHTML = '';
+        if (chatModels.length) {
+            chatModels.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; sel.appendChild(o); });
+        } else {
+            const o = document.createElement('option');
+            o.value = state.globalModel;
+            o.textContent = state.globalModel || '（无法获取模型列表）';
+            sel.appendChild(o);
+            o.disabled = !state.globalModel;
+        }
+        syncChatModelSelect();
+    } catch (e) {}
+}
+
+// 把下拉值对齐到当前会话的模型（convModel 优先，其次全局）
+function syncChatModelSelect() {
+    const sel = chatModelSel();
+    if (!sel) return;
+    const active = state.convModel || state.globalModel || '';
+    const options = [...sel.options];
+    const hit = options.find(o => o.value === active);
+    if (hit) sel.value = hit.value;
+    else if (active) {
+        const o = document.createElement('option');
+        o.value = active; o.textContent = active;
+        sel.appendChild(o); sel.value = active;
+    } else if (options.length) {
+        sel.selectedIndex = 0;
+    }
+}
+
+async function onChatModelChange(sel) {
+    const model = (sel.value || '').trim();
+    if (!model || model === state.convModel) return;
+    // 还没有会话时先自动建一个（当前科目/模式），保证模型绑定到会话
+    if (!state.conversationId) {
+        try {
+            const resp = await apiFetch(`/api/chat/conversations?subject=${state.subject}&mode=${state.mode}`, { method: 'POST' });
+            if (!resp.ok) throw new Error('创建会话失败');
+            const d = await resp.json();
+            state.conversationId = d.conversation_id;
+            saveActiveConv();
+            loadConversations();
+        } catch (e) {
+            addSystemMessage(`⚠️ ${e.message}`);
+            syncChatModelSelect();
+            return;
+        }
+    }
+    try {
+        const resp = await apiFetch(`/api/chat/conversations/${state.conversationId}/model?model=${encodeURIComponent(model)}`, { method: 'POST' });
+        if (!resp.ok) throw new Error('保存失败');
+        state.convModel = model;
+        addSystemMessage(`✅ 本会话已切换模型：${model}`);
+        loadConversations();
+    } catch (e) {
+        addSystemMessage(`⚠️ 模型切换失败：${e.message}`);
+        syncChatModelSelect();
+    }
+}
+
+// ===== 通用操作弹层（替换原生 prompt/confirm，输入框回车确认、Esc 取消）=====
+let dialogOkHandler = null;
+
+function openDialog(opts) {
+    const modal = document.getElementById('dialogModal');
+    if (!modal) return;
+    document.getElementById('dialogTitle').textContent = opts.title || '操作';
+    document.getElementById('dialogBody').innerHTML = opts.bodyHTML || '';
+    document.getElementById('dialogOkBtn').textContent = opts.okText || '确定';
+    dialogOkHandler = opts.onOk || null;
+    modal.style.display = 'flex';
+    const first = modal.querySelector('input, select, textarea');
+    if (first) { setTimeout(() => { try { first.focus(); } catch (e) {} }, 30); }
+}
+
+function closeDialog(e) {
+    if (e && e.target !== e.currentTarget) return;  // 点背景才触发；按钮走 onclick
+    const modal = document.getElementById('dialogModal');
+    if (modal) modal.style.display = 'none';
+    dialogOkHandler = null;
+}
+
+function dialogOk() {
+    if (dialogOkHandler) dialogOkHandler();
+}
+
+document.getElementById('dialogOkBtn').addEventListener('click', dialogOk);
+document.getElementById('dialogModal').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeDialog(); }
+    else if (e.key === 'Enter' && e.target && e.target.tagName !== 'TEXTAREA' && e.target.id !== 'dialogOkBtn') {
+        e.preventDefault();
+        dialogOk();
+    }
+});
+
+// ===== 设置页一键填充常用服务 =====
+const API_PRESETS = {
+    main:   { base_url: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash', multimodal: false },
+    vision: { base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4v-flash' },
+    asr:    { base_url: 'https://dashscope.aliyuncs.com', model: 'qwen3-asr-flash' },
+};
+
+function applyPreset(section) {
+    const p = API_PRESETS[section];
+    const ids = {
+        main:   { base: 'setMainBaseUrl', model: 'setMainModel', mm: 'setMainMultimodal' },
+        vision: { base: 'setVisionBaseUrl', model: 'setVisionModel' },
+        asr:    { base: 'setAsrBaseUrl', model: 'setAsrModel' },
+    };
+    const m = ids[section];
+    if (!p || !m) return;
+    const elBase = document.getElementById(m.base);
+    if (elBase) elBase.value = p.base_url;
+    const elModel = document.getElementById(m.model);
+    if (elModel) elModel.value = p.model;
+    if (m.mm) {
+        const mm = document.getElementById(m.mm);
+        if (mm) mm.checked = !!p.multimodal;
+    }
+    if (elBase) {
+        elBase.style.borderColor = 'var(--color-primary)';
+        setTimeout(() => { elBase.style.borderColor = ''; }, 1000);
+    }
+}
+
+// ⚡ 模式A 精简上下文开关（设置页勾选，本地记忆）
+function isCompactASubjectCtx() {
+    try { return localStorage.getItem('kaoyan_compact_ctx') === '1'; } catch (e) { return false; }
 }
 
 // ===== 设置（模型 API 配置，保存即生效）=====
@@ -1182,6 +1643,8 @@ async function loadModelConfig() {
         fill('setMainModel', c.main && c.main.model);
         const mm = document.getElementById('setMainMultimodal');
         if (mm) mm.checked = !!(c.main && c.main.multimodal);
+        const compactA = document.getElementById('setCompactA');
+        if (compactA) compactA.checked = isCompactASubjectCtx();
         ph('setMainKey', c.main && c.main.has_key);
         if (c.main && !c.main.has_key) document.getElementById('setMainKey').placeholder = '尚未配置 Key';
 
@@ -1193,6 +1656,10 @@ async function loadModelConfig() {
 
         fill('setAsrBaseUrl', c.asr && c.asr.base_url);
         fill('setAsrModel', c.asr && c.asr.model);
+        const ap = document.getElementById('setAsrProvider');
+        if (ap) ap.value = (c.asr && c.asr.provider) || 'local';
+        const asz = document.getElementById('setAsrSize');
+        if (asz) asz.value = (c.asr && c.asr.size) || 'small';
         if (c.asr && !c.asr.has_key) document.getElementById('setAsrKey').placeholder = '尚未配置 Key';
     } catch (e) {}
 }
@@ -1243,6 +1710,11 @@ async function saveSettings() {
         else localStorage.removeItem('kaoyan_token');
     } catch (e) {}
 
+    try {
+        if (document.getElementById('setCompactA').checked) localStorage.setItem('kaoyan_compact_ctx', '1');
+        else localStorage.removeItem('kaoyan_compact_ctx');
+    } catch (e) {}
+
     // 模型配置（服务器，留空 Key = 保留已有）
     const payload = {
         main: {
@@ -1261,6 +1733,8 @@ async function saveSettings() {
             base_url: document.getElementById('setAsrBaseUrl').value.trim(),
             api_key: document.getElementById('setAsrKey').value.trim(),
             model: document.getElementById('setAsrModel').value.trim(),
+            provider: document.getElementById('setAsrProvider').value,
+            size: document.getElementById('setAsrSize').value,
         },
     };
     try {
@@ -1274,6 +1748,9 @@ async function saveSettings() {
             throw new Error(d.detail || resp.status);
         }
         alert('✅ 模型配置已保存，立即生效');
+        // 全局模型可能变了：重新拉对话框模型下拉列表
+        chatModelLoaded = false;
+        loadChatModelList();
     } catch (err) {
         alert(`❌ 保存失败：${err.message}`);
     }

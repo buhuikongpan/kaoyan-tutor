@@ -26,6 +26,9 @@ _extract_lock = asyncio.Lock()
 # 课程总结生成同样串行（分段提取 + 合并要调多次 LLM，防并发限流）
 _summary_lock = asyncio.Lock()
 
+# 批量补生成总结的进度状态（一键补齐存量视频）
+_batch_state = {"running": False, "queued": 0, "done": 0, "failed": 0}
+
 SUBJECTS = {"math": "数学", "english": "英语", "politics": "政治"}
 
 SEGMENT_SEC = 1200  # 总结分段：20 分钟一段
@@ -348,7 +351,7 @@ async def _extract_subtitle_impl(video_id: int, db: Session):
         # 2. 读取音频并调用 ASR（含静音检测）
         with open(audio_path, "rb") as f:
             audio_data = f.read()
-        asr_result = await transcribe_audio(audio_data, audio_format="mp3")
+        asr_result = await transcribe_audio(audio_data, audio_format="mp3", audio_path=audio_path)
         os.remove(audio_path)
 
         if not asr_result or not asr_result.get("chunks"):
@@ -365,6 +368,25 @@ async def _extract_subtitle_impl(video_id: int, db: Session):
         sub_file = Path(settings.subtitle_dir) / f"{video_id}.txt"
         sub_file.parent.mkdir(parents=True, exist_ok=True)
         sub_file.write_text(plain_text, encoding="utf-8")
+
+        # 3.5 本地精确时间轴：每条 chunk 已带真实 start/end，直接落库，无需字符占比近似
+        if asr_result.get("precise"):
+            db.query(Subtitle).filter(Subtitle.video_id == video_id).delete()
+            seq = 0
+            for c in chunks:
+                st = float(c["start"])
+                en = float(c["end"])
+                if en <= st:
+                    en = st + 2.0
+                db.add(Subtitle(video_id=video_id, subject=video.subject,
+                       start_time=round(st, 1), end_time=round(en, 1),
+                       text=c["text"], seq=seq))
+                seq += 1
+            video.subtitle_path = str(sub_file)
+            video.subtitle_status = "done"
+            db.commit()
+            asyncio.create_task(_auto_generate_summary(video_id))
+            return {"status": "done", "message": "字幕提取完成"}
 
         # 4. 字数比例分配 + 静音微调
         db.query(Subtitle).filter(Subtitle.video_id == video_id).delete()
@@ -570,6 +592,51 @@ async def generate_summary(video_id: int, db: Session = Depends(get_db)):
         if cur and cur.summary_status == "processing":
             raise HTTPException(400, "总结生成中，请稍候")
         return await _generate_summary_impl(video_id, db)
+
+
+@router.post("/batch-summary")
+async def batch_generate_summaries(db: Session = Depends(get_db)):
+    """一键补生成：所有「字幕已完成但总结缺失」的视频排队生成总结（后台串行，不阻塞请求）"""
+    if _batch_state["running"]:
+        raise HTTPException(400, f"批量生成正在进行中（已完成 {_batch_state['done']}/{_batch_state['queued']}），请稍候")
+    videos = db.query(Video).filter(
+        Video.subtitle_status == "done",
+        Video.summary_status.in_(("none", "pending", "failed")),
+    ).all()
+    if not videos:
+        return {"running": False, "queued": 0, "done": 0, "failed": 0,
+                "message": "没有需要生成总结的视频"}
+    _batch_state.update(running=True, queued=len(videos), done=0, failed=0)
+    ids = [v.id for v in videos]
+    asyncio.create_task(_run_batch_summary(ids))
+    return {"running": True, "queued": len(videos), "done": 0, "failed": 0,
+            "message": f"已排队 {len(videos)} 个视频，逐个串行生成中（约 10~60 秒/个）"}
+
+
+async def _run_batch_summary(ids: list):
+    """后台串行批量生成：逐个持锁调用 _generate_summary_impl，失败计入 failed 继续下一个"""
+    try:
+        for vid in ids:
+            async with _summary_lock:
+                db = SessionLocal()
+                try:
+                    try:
+                        await _generate_summary_impl(vid, db)
+                        _batch_state["done"] += 1
+                    except Exception as e:
+                        _batch_state["failed"] += 1
+                        print(f"  [i] 批量总结失败 #{vid}: {e}")
+                finally:
+                    db.close()
+    finally:
+        _batch_state["running"] = False
+        print(f"  [i] 批量总结结束：done={_batch_state['done']} failed={_batch_state['failed']}")
+
+
+@router.get("/batch-summary/status")
+def batch_summary_status():
+    """批量生成进度查询（前端轮询用）"""
+    return dict(_batch_state)
 
 
 @router.get("/{video_id}/summary")

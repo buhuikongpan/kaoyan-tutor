@@ -5,41 +5,46 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>考研学习平台</title>
-    <link rel="stylesheet" href="css/style.css?v=8">
+    <link rel="stylesheet" href="css/style.css?v=11">
 </head>
 <body>
     <div class="app">
         <!-- 顶部导航 -->
         <header class="header">
-            <div class="logo">📚 考研学习平台</div>
+            <h1 class="logo">📚 考研学习平台</h1>
             <div class="header-center">
                 <!-- Agent 切换 -->
-                <div class="mode-tabs">
+                <nav class="mode-tabs" aria-label="问答模式切换">
                     <button class="mode-tab active" data-mode="A" onclick="switchMode('A')">💬 即时问答</button>
                     <button class="mode-tab" data-mode="B" onclick="switchMode('B')">🎯 引导输出</button>
                     <button class="mode-tab" data-mode="C" onclick="switchMode('C')">📝 课后问答</button>
-                </div>
+                </nav>
                 <!-- 科目切换 -->
-                <div class="subject-tabs">
+                <nav class="subject-tabs" aria-label="科目切换">
                     <button class="subject-tab active" data-subject="math" onclick="switchSubject('math')">📐 数学</button>
                     <button class="subject-tab" data-subject="english" onclick="switchSubject('english')">📖 英语</button>
                     <button class="subject-tab" data-subject="politics" onclick="switchSubject('politics')">🗳️ 政治</button>
-                </div>
+                </nav>
             </div>
-            <button class="btn-settings" onclick="showSettings()">⚙️</button>
+            <button class="btn-settings" onclick="showSettings()" aria-label="模型设置">⚙️</button>
         </header>
 
         <!-- 主内容区 -->
-        <div class="main-content">
+        <main class="main-content" id="mainContent">
             <!-- 左侧：视频列表（从上到下） -->
-            <aside class="video-sidebar">
+            <aside class="video-sidebar" aria-label="视频目录">
                 <div class="sidebar-header">
                     <span class="sidebar-title">📁 视频目录</span>
                     <div class="sidebar-actions">
-                        <button class="btn-sm" onclick="showNewFolderDialog()" title="新建文件夹">📂</button>
-                        <button class="btn-sm" onclick="document.getElementById('folderUploadInput').click()" title="扫描文件夹上传">📤</button>
-                        <button class="btn-sm btn-primary-sm" onclick="document.getElementById('uploadInput').click()" title="上传视频">＋</button>
+                        <button class="btn-sm" onclick="batchSummaries()" title="一键补生成课程总结（字幕已完成但无总结的视频）" aria-label="批量生成课程总结">📑</button>
+                        <button class="btn-sm" onclick="rescanVideos()" title="重新扫描本地目录（找回手动放入 storage/videos 的视频）" aria-label="重新扫描本地目录">🔎</button>
+                        <button class="btn-sm" onclick="showNewFolderDialog()" title="新建文件夹" aria-label="新建文件夹">📂</button>
+                        <button class="btn-sm" onclick="document.getElementById('folderUploadInput').click()" title="扫描文件夹上传" aria-label="扫描文件夹上传">📤</button>
+                        <button class="btn-sm btn-primary-sm" onclick="document.getElementById('uploadInput').click()" title="上传视频" aria-label="上传视频">＋</button>
                     </div>
+                </div>
+                <div class="sidebar-search-row">
+                    <input type="text" id="videoSearch" class="video-search" placeholder="🔍 搜索视频…（标题/文件名）" oninput="onVideoSearch(this.value)" aria-label="搜索视频">
                 </div>
                 <div class="sidebar-body" id="videoTreeBody">
                     <div class="loading" id="pageLoadCheck">⏳ 如果这句话一直不消失，说明 JS 没加载</div>
@@ -67,9 +72,9 @@
                         <button class="speed-btn" onclick="setSpeed(4)">4x</button>
                         <button class="speed-btn" onclick="setSpeed(5)">5x</button>
                         <span class="speed-sep"></span>
-                        <button class="speed-btn" onclick="togglePip()" title="画中画">🖼️</button>
-                        <button class="speed-btn" onclick="toggleSubtitleOverlay()" title="字幕开关">📄</button>
-                        <button class="speed-btn" id="captureToggleBtn" onclick="toggleAutoCapture()" title="自动截图当前画面">🎥</button>
+                        <button class="speed-btn" onclick="togglePip()" title="画中画" aria-label="画中画">🖼️</button>
+                        <button class="speed-btn" onclick="toggleSubtitleOverlay()" title="字幕开关" aria-label="字幕开关">📄</button>
+                        <button class="speed-btn" id="captureToggleBtn" onclick="toggleAutoCapture()" title="自动截图当前画面" aria-label="自动截图当前画面">🎥</button>
                     </div>
                     <div class="video-placeholder" id="videoPlaceholder">
                         <div class="placeholder-icon">🎬</div>
@@ -95,8 +100,8 @@
                     <span id="chatModeLabel">💬 即时问答</span>
                     <span class="chat-subject" id="chatSubjectLabel">📐 数学</span>
                     <div class="chat-header-actions">
-                        <button class="btn-sm" onclick="toggleConversationList()" title="显示/隐藏对话列表">☰</button>
-                        <button class="btn-sm btn-primary-sm" onclick="newConversation()" title="新对话">＋</button>
+                        <button class="btn-sm" onclick="toggleConversationList()" title="显示/隐藏对话列表" aria-label="显示或隐藏对话列表">☰</button>
+                        <button class="btn-sm btn-primary-sm" onclick="newConversation()" title="新对话" aria-label="新建对话">＋</button>
                     </div>
                 </div>
                 <div class="chat-body">
@@ -104,8 +109,8 @@
                         <div class="conv-sb-header">
                             <span>📁 我的对话</span>
                             <span class="conv-sb-actions">
-                                <button class="btn-sm" onclick="collapseConversationSidebar()" title="收起">◀</button>
-                                <button class="btn-sm btn-primary-sm" onclick="newConversation()" title="新对话">＋</button>
+                                <button class="btn-sm" onclick="collapseConversationSidebar()" title="收起" aria-label="收起对话列表">◀</button>
+                                <button class="btn-sm btn-primary-sm" onclick="newConversation()" title="新对话" aria-label="新建对话">＋</button>
                             </span>
                         </div>
                         <div class="conv-body" id="conversationList"></div>
@@ -118,9 +123,19 @@
                             </div>
                         </div>
                         <div class="chat-input-area">
+                            <div class="model-picker-row" title="切换当前会话使用的模型（仅本会话生效）">
+                                <label for="chatModelSelect">🤖 模型</label>
+                                <select id="chatModelSelect" onchange="onChatModelChange(this)"></select>
+                                <span class="model-picker-hint">会话级</span>
+                            </div>
+                            <div class="quote-bar" id="quoteBar" style="display:none">
+                                <span class="quote-bar-icon">📎</span>
+                                <span class="quote-bar-text" id="quoteBarText"></span>
+                                <button class="quote-bar-close" onclick="clearQuote()" title="取消引用">✕</button>
+                            </div>
                             <div class="input-row">
                                 <div class="input-extra">
-                                    <button class="btn-img" onclick="document.getElementById('imgInput').click()" title="上传图片/草稿">🖼️</button>
+                                    <button class="btn-img" onclick="document.getElementById('imgInput').click()" title="上传图片/草稿" aria-label="上传图片或草稿">🖼️</button>
                                     <input type="file" id="imgInput" accept="image/*" style="display:none" onchange="onImagePick(this)">
                                 </div>
                                 <textarea id="chatInput" rows="2" placeholder="输入问题，回车发送..." onkeydown="onInputKeydown(event)" onpaste="onPaste(event)"></textarea>
@@ -128,21 +143,36 @@
                             </div>
                             <div class="image-preview" id="imagePreview" style="display:none">
                                 <img id="previewImg" src="" alt="预览">
-                                <button class="btn-remove-img" onclick="removeImage()">✕</button>
+                                <button class="btn-remove-img" onclick="removeImage()" aria-label="移除图片">✕</button>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
+        </main>
+    </div>
+
+    <!-- 通用操作弹层（替换原生 prompt/confirm，支持输入框/下拉/确认） -->
+    <div class="modal-overlay" id="dialogModal" style="display:none" onclick="closeDialog(event)" role="dialog" aria-modal="true" aria-label="操作确认">
+        <div class="modal-content" style="max-width:440px" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h2 id="dialogTitle">操作</h2>
+                <button class="btn-close" onclick="closeDialog()" aria-label="关闭">✕</button>
+            </div>
+            <div class="modal-body" id="dialogBody"></div>
+            <div class="dialog-actions" id="dialogActions" style="text-align:right;margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+                <button class="btn-secondary" onclick="closeDialog()">取消</button>
+                <button class="btn-primary" id="dialogOkBtn">确定</button>
+            </div>
         </div>
     </div>
 
     <!-- 设置弹窗 -->
-    <div class="modal-overlay" id="settingsModal" style="display:none" onclick="closeSettings(event)">
+    <div class="modal-overlay" id="settingsModal" style="display:none" onclick="closeSettings(event)" role="dialog" aria-modal="true" aria-label="模型设置">
         <div class="modal-content" style="max-width:600px" onclick="event.stopPropagation()">
             <div class="modal-header">
                 <h2>⚙️ 模型设置</h2>
-                <button class="btn-close" onclick="closeSettings()">✕</button>
+                <button class="btn-close" onclick="closeSettings()" aria-label="关闭">✕</button>
             </div>
             <div class="modal-body">
 
@@ -157,6 +187,7 @@
                         <input type="text" id="setMainModel" list="mainModelList" placeholder="可手输，或点「获取模型」自动拉取">
                         <datalist id="mainModelList"></datalist>
                         <label class="checkbox-row"><input type="checkbox" id="setMainMultimodal"> 主模型支持多模态（可直接发图片，无需视觉辅助）</label>
+                        <label class="checkbox-row"><input type="checkbox" id="setCompactA"> ⚡ 模式A 精简上下文：只发「课程总结 + 播放位置前后 ±10 分钟字幕」（回答更快更省，默认关闭）</label>
                     </div>
                 </div>
 
@@ -177,6 +208,16 @@
                 <div class="form-group">
                     <label>🎬 语音识别 ASR（视频字幕）</label>
                     <div class="form-card">
+                        <label>识别引擎</label>
+                        <select id="setAsrProvider">
+                            <option value="local">本地 Whisper（免费 / 离线 / 字幕时间轴更准）</option>
+                            <option value="qwen">千问云 API（在线，按量计费）</option>
+                        </select>
+                        <label>本地模型档位（仅本地引擎生效）</label>
+                        <select id="setAsrSize">
+                            <option value="small">small（快，基本够用）</option>
+                            <option value="medium">medium（更准，更慢）</option>
+                        </select>
                         <label>API 地址（可输 base 或完整端点）</label>
                         <input type="text" id="setAsrBaseUrl" placeholder="https://dashscope.aliyuncs.com 或完整端点">
                         <label>API Key（留空 = 保持已有 Key）</label>
@@ -184,6 +225,15 @@
                         <div class="model-row"><label>模型名称</label><button class="btn-sm" onclick="fetchModels('asr')" title="从 API 拉取可用模型">🔍 获取模型</button></div>
                         <input type="text" id="setAsrModel" list="asrModelList" placeholder="可手输，或点「获取模型」自动拉取">
                         <datalist id="asrModelList"></datalist>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>⚡ 一键填充常用服务（填入地址与模型名；Key 仍需填写或保留已有）</label>
+                    <div class="form-card preset-row">
+                        <button type="button" class="btn-sm preset-btn" onclick="applyPreset('main')">🧠 DeepSeek 主模型</button>
+                        <button type="button" class="btn-sm preset-btn" onclick="applyPreset('vision')">👁️ 智谱 GLM-4V</button>
+                        <button type="button" class="btn-sm preset-btn" onclick="applyPreset('asr')">🎬 千问 ASR</button>
                     </div>
                 </div>
 
@@ -209,7 +259,7 @@
         <div class="modal-content" style="max-width:780px">
             <div class="modal-header">
                 <h2>📄 课程总结</h2>
-                <button class="btn-close" onclick="closeSummary()">✕</button>
+                <button class="btn-close" onclick="closeSummary()" aria-label="关闭">✕</button>
             </div>
             <div id="summaryBody" style="max-height:65vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.8;padding:14px 16px;background:#f7f8fa;border-radius:6px;margin:6px 0"></div>
             <div style="text-align:right">
@@ -219,7 +269,7 @@
     </div>
 
     <!-- 内联测试：验证 JS 是否能运行 -->
-    <script src="js/app.js?v=11"></script>
+    <script src="js/app.js?v=15"></script>
     <!-- KaTeX（本地化，不依赖 CDN，保证公式渲染稳定） -->
     <link rel="stylesheet" href="vendor/katex/katex.min.css">
     <script src="vendor/katex/katex.min.js" defer></script>

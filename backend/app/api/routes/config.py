@@ -40,6 +40,8 @@ class AsrModelIn(BaseModel):
     base_url: str = ""
     api_key: str = ""
     model: str = ""
+    provider: str = ""   # local / qwen
+    size: str = ""       # faster-whisper 模型档位：small / medium
 
 
 class ModelConfigIn(BaseModel):
@@ -85,19 +87,38 @@ async def list_models(data: ListModelsIn):
     base_url = (data.base_url or "").strip().rstrip("/")
     if not base_url:
         raise HTTPException(400, "请先填写 API 地址")
-    # 兼容完整端点输入：去掉 /chat/completions 尾巴取 base
+    models, error = await _fetch_models(base_url, data.api_key)
+    return {"models": models, "error": error}
+
+
+@router.post("/chat-models")
+async def chat_models():
+    """对话框模型下拉：用**已保存**的主模型配置（服务端 Key，明文不出服务器）
+    拉取可用模型列表，供对话框一键切换会话级模型。
+    """
+    cfg = load_model_config()["main"]
+    base_url = (cfg.get("base_url") or "").strip()
+    models, error = await _fetch_models(base_url, cfg.get("api_key") or "")
+    return {"models": models, "current": (cfg.get("model") or "").strip(), "error": error}
+
+
+async def _fetch_models(base_url: str, api_key: str) -> tuple:
+    """请求 GET {base_url}/models，返回 (models, error)。base_url 兼容完整端点写法。"""
+    base_url = (base_url or "").strip().rstrip("/")
+    if not base_url:
+        return [], "未配置 API 地址"
     if base_url.endswith("/chat/completions"):
         base_url = base_url[: -len("/chat/completions")].rstrip("/")
     headers = {}
-    if data.api_key:
-        headers["Authorization"] = f"Bearer {data.api_key}"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=8.0)) as client:
             resp = await client.get(base_url + "/models", headers=headers)
         if resp.status_code != 200:
-            return {"models": [], "error": f"接口返回 HTTP {resp.status_code}"}
+            return [], f"接口返回 HTTP {resp.status_code}"
         payload = resp.json()
         models = [m.get("id") for m in payload.get("data", []) if m.get("id")]
-        return {"models": models, "error": ""}
+        return models, ""
     except Exception as e:
-        return {"models": [], "error": str(e)[:200]}
+        return [], str(e)[:200]

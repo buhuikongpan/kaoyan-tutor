@@ -75,7 +75,7 @@ def _load_messages(db: Session, conv_id: str, limit: int = MAX_HISTORY) -> list:
 def _append_message(
     db: Session,
     conv_id: str, subject: str, mode: str, role: str,
-    content, reasoning: str = "",
+    content, reasoning: str = "", quote: str = "",
 ) -> None:
     """写入一条消息，并更新会话 updated_at、首条提问自动命名"""
     import datetime
@@ -83,7 +83,8 @@ def _append_message(
     jsonable = content if isinstance(content, (list, dict)) else (content or "")
     stored = json.dumps(jsonable, ensure_ascii=False) if isinstance(jsonable, (list, dict)) else str(jsonable)
     db.add(ChatMessage(conv_id=conv_id, subject=subject, mode=mode,
-                       role=role, content=stored, reasoning=reasoning or "", seq=seq))
+                       role=role, content=stored, reasoning=reasoning or "",
+                       quote=quote or "", seq=seq))
     sess = db.query(ChatSession).filter(ChatSession.conv_id == conv_id).first()
     if sess:
         sess.updated_at = datetime.datetime.utcnow()
@@ -126,6 +127,7 @@ def list_conversations(subject: str = Query("math"), db: Session = Depends(get_d
             "name": s.name or DEFAULT_NAME,
             "mode": s.mode,
             "subject": s.subject,
+            "model": s.model or "",  # 会话级模型（空 = 全局）
             "message_count": counts.get(s.conv_id, 0),
             "updated_at": s.updated_at.isoformat() if s.updated_at else None,
         })
@@ -183,7 +185,7 @@ def get_history(conv_id: str, db: Session = Depends(get_db)):
             content = parsed
         except Exception:
             pass
-        base = {"role": m.role, "reasoning": m.reasoning or ""}
+        base = {"role": m.role, "reasoning": m.reasoning or "", "quote": m.quote or ""}
         if isinstance(content, list):  # 含图片的 user 消息
             texts = [p.get("text", "") for p in content if isinstance(p, dict)]
             items.append({**base, "content": "\n".join(texts), "has_image": True})
@@ -193,8 +195,22 @@ def get_history(conv_id: str, db: Session = Depends(get_db)):
         "conversation_id": conv_id,
         "name": sess.name if sess else DEFAULT_NAME,
         "mode": sess.mode if sess else "A",
+        "model": sess.model if sess and sess.model else "",
         "messages": items,
     }
+
+
+@router.post("/conversations/{conv_id}/model")
+def set_conversation_model(conv_id: str, model: str = Query(...),
+                           db: Session = Depends(get_db)):
+    """会话级模型切换：只改当前会话用的模型（不碰全局设置），发送即生效"""
+    model = (model or "").strip()[:120]
+    sess = db.query(ChatSession).filter(ChatSession.conv_id == conv_id).first()
+    if not sess:
+        raise HTTPException(404, "会话不存在")
+    sess.model = model
+    db.commit()
+    return {"conversation_id": conv_id, "model": sess.model}
 
 
 # ---------- 聊天（SSE 流式） ----------
@@ -210,6 +226,7 @@ async def send_message_stream(
     mode: str = Form("A"),
     subtitle_context: str = Form(""),
     conversation_id: str = Form(""),
+    quote: str = Form(""),  # 引用内容（JSON 字符串 {"text": "..."}，用户引用 AI 回答某段特别说明）
     image: UploadFile = File(None),
     watched_video_ids: str = Form(""),  # 模式B：勾选的视频ID（JSON 数组字符串）
     db: Session = Depends(get_db),
@@ -226,6 +243,16 @@ async def send_message_stream(
         raise HTTPException(400, f"不支持的科目: {subject}")
     if mode not in MODE_NAMES:
         raise HTTPException(400, f"不支持的 Agent 模式: {mode}")
+
+    # 引用解析：前端传 {"text": "原文"}，取 text 截断（防上下文膨胀）
+    quote_text = ""
+    if quote and quote.strip():
+        try:
+            qobj = json.loads(quote)
+            quote_text = str(qobj.get("text") or "").strip()[:500]
+        except Exception:
+            quote_text = quote.strip()[:500]
+    quote_prefix = f"[用户引用了你的回答：「{quote_text}」]\n" if quote_text else ""
 
     # 图片 → base64（沿用旧 send-with-image 的处理）
     image_base64 = ""
@@ -245,10 +272,14 @@ async def send_message_stream(
     conv_id = conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
     _ensure_session(db, conv_id, subject, mode)
 
+    # 会话级模型：会话行有 model 则用它，否则用全局主模型（llm_service 内部兜底）
+    sess_row = db.query(ChatSession).filter(ChatSession.conv_id == conv_id).first()
+    conv_model = sess_row.model.strip() if sess_row and sess_row.model else ""
+
     # 从 DB 载入历史（含 reasoning 回填限制），保证重启后上下文不丢
     history = _load_messages(db, conv_id)
 
-    # ---- 构建用户消息（文本 + 可选图片） ----
+    # ---- 构建用户消息（文本 + 可选图片 + 引用） ----
     user_content: str
     multimodal_content = None  # 主模型多模态时直接传图片数组
     if image_base64:
@@ -256,10 +287,10 @@ async def send_message_stream(
         if cfg["main"].get("multimodal"):
             # 主模型本身多模态：图片按 OpenAI 格式直接发给主模型
             multimodal_content = [
-                {"type": "text", "text": query},
+                {"type": "text", "text": quote_prefix + query},
                 {"type": "image_url", "image_url": {"url": image_base64}},
             ]
-            user_content = query + "\n[用户上传了图片]"
+            user_content = quote_prefix + query + "\n[用户上传了图片]"
         elif cfg["vision"].get("enabled"):
             # 视觉辅助模型（默认智谱）：先分析成文字描述再给主模型
             try:
@@ -272,13 +303,13 @@ async def send_message_stream(
                     image_description = "\n[用户上传了图片]"
             except Exception as e:
                 image_description = f"\n[用户上传了图片，分析异常: {str(e)}]"
-            user_content = query + image_description
+            user_content = quote_prefix + query + image_description
         else:
-            user_content = query + "\n[用户上传了图片，但主模型不支持图片且视觉辅助已关闭]"
+            user_content = quote_prefix + query + "\n[用户上传了图片，但主模型不支持图片且视觉辅助已关闭]"
     else:
-        user_content = query
+        user_content = quote_prefix + query
 
-    _append_message(db, conv_id, subject, mode, "user", multimodal_content or user_content)
+    _append_message(db, conv_id, subject, mode, "user", multimodal_content or user_content, quote=quote_text)
     history.append({"role": "user", "content": multimodal_content or user_content})
 
     # 模式B：勾选视频的上下文——优先用「课程总结」（高密度、跨多节不爆上下文），
@@ -316,6 +347,7 @@ async def send_message_stream(
                 subject=subject,
                 mode=mode,
                 subtitle_context=subtitle_context,
+                model_override=conv_model,
             ):
                 if kind == "reasoning":
                     reasoning_acc.append(text)
