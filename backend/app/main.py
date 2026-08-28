@@ -11,13 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from .core.config import settings, BASE_DIR
 from .core.database import init_db, SessionLocal
 from .models import Video
-from .api.routes import videos, chat, config, folders
+from .api.routes import videos, chat, config, folders, voice
 
 # SQLite 数据库：放在项目 data 目录（避免容器化遗留路径）
 DB_PATH = str(BASE_DIR / "data" / "kaoyan.db")
 FRONTEND_DIR = str(BASE_DIR / "frontend")
 
-app = FastAPI(title="考研学习平台", version="2.1.0")
+app = FastAPI(title="考研学习平台", version="2.2.0")
 
 # 退出时备份数据库（data/kaoyan.db.bak）
 def _backup_db():
@@ -66,6 +66,7 @@ app.include_router(videos.router)
 app.include_router(chat.router)
 app.include_router(config.router)
 app.include_router(folders.router)
+app.include_router(voice.router)
 
 # 初始化数据库
 init_db()

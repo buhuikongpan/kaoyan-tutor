@@ -1156,3 +1156,21 @@ video::cue(b) {
 /* ===== 设置页一键填充 ===== */
 .preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .preset-btn { width: auto; padding: 6px 12px; font-size: 13px; }
+
+/* ===== 语音输入（录音中状态） ===== */
+.btn-img.recording {
+    color: #fff;
+    background: var(--color-danger);
+    border-color: var(--color-danger);
+    animation: voice-pulse 1.2s ease-in-out infinite;
+    font-size: 12px;
+    font-weight: 600;
+    width: auto;           /* 显示「⏺12s」时自适应宽度 */
+    min-width: 32px;
+    padding: 0 6px;
+}
+@keyframes voice-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(207, 19, 34, 0.45); }
+    50% { box-shadow: 0 0 0 6px rgba(207, 19, 34, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .btn-img.recording { animation: none; } }

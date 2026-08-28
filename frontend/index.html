@@ -5,7 +5,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>考研学习平台</title>
-    <link rel="stylesheet" href="css/style.css?v=11">
+    <link rel="stylesheet" href="css/style.css?v=12">
 </head>
 <body>
     <div class="app">
@@ -135,6 +135,7 @@
                             </div>
                             <div class="input-row">
                                 <div class="input-extra">
+                                    <button class="btn-img" id="voiceInputBtn" onclick="toggleVoiceInput()" title="🎤 语音输入（录音后自动填入输入框）" aria-label="语音输入">🎤</button>
                                     <button class="btn-img" onclick="document.getElementById('imgInput').click()" title="上传图片/草稿" aria-label="上传图片或草稿">🖼️</button>
                                     <input type="file" id="imgInput" accept="image/*" style="display:none" onchange="onImagePick(this)">
                                 </div>
@@ -269,7 +270,7 @@
     </div>
 
     <!-- 内联测试：验证 JS 是否能运行 -->
-    <script src="js/app.js?v=15"></script>
+    <script src="js/app.js?v=16"></script>
     <!-- KaTeX（本地化，不依赖 CDN，保证公式渲染稳定） -->
     <link rel="stylesheet" href="vendor/katex/katex.min.css">
     <script src="vendor/katex/katex.min.js" defer></script>

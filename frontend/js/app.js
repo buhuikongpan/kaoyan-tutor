@@ -1178,6 +1178,89 @@ function onImagePick(input) {
 function removeImage() { state.currentImage=null; state.currentImageFile=null;
     document.getElementById('imagePreview').style.display='none'; }
 
+// ===== 语音输入（浏览器录音 → 后端 Whisper/千问转文字 → 填入输入框）=====
+let voiceRecorder = null;   // MediaRecorder
+let voiceChunks = [];
+let voiceStream = null;     // getUserMedia 流（停止时逐个 track.stop）
+let voiceTimer = null;
+let voiceSec = 0;
+const VOICE_MAX_SEC = 120;  // 最长录音 2 分钟（防忘关）
+
+function voiceBtnEl() { return document.getElementById('voiceInputBtn'); }
+
+function setVoiceBtnUI(recording, sec) {
+    const btn = voiceBtnEl();
+    if (!btn) return;
+    btn.classList.toggle('recording', recording);
+    btn.textContent = recording ? `⏺${sec || ''}` : '🎤';
+    btn.title = recording ? '点击停止并识别' : '🎤 语音输入（录音后自动填入输入框）';
+}
+
+async function toggleVoiceInput() {
+    if (voiceRecorder && voiceRecorder.state === 'recording') { stopVoiceInput(); return; }
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+        addSystemMessage('⚠️ 当前浏览器不支持录音（需 Chrome/Edge/Firefox 等）');
+        return;
+    }
+    try {
+        voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+        addSystemMessage('⚠️ 无法访问麦克风：请点浏览器地址栏的麦克风图标允许权限后重试');
+        return;
+    }
+    voiceChunks = [];
+    voiceSec = 0;
+    const mr = new MediaRecorder(voiceStream);
+    voiceRecorder = mr;
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) voiceChunks.push(e.data); };
+    mr.onstop = () => { voiceRecorder = null; handleVoiceChunks(); };
+    mr.onerror = () => { voiceRecorder = null; cleanupVoiceStream(); addSystemMessage('⚠️ 录音出错，请重试'); };
+    mr.start(250);  // 每 250ms 收集一次数据，防止过长录音丢数据
+    setVoiceBtnUI(true, '');
+    voiceTimer = setInterval(() => {
+        voiceSec++;
+        setVoiceBtnUI(true, `${voiceSec}s`);
+        if (voiceSec >= VOICE_MAX_SEC) stopVoiceInput();
+    }, 1000);
+    addSystemMessage('🎤 录音中…说完再点一次按钮停止（最长 2 分钟）');
+}
+
+function stopVoiceInput() {
+    if (!voiceRecorder || voiceRecorder.state !== 'recording') return;
+    try { voiceRecorder.stop(); } catch (e) {}
+    if (voiceTimer) { clearInterval(voiceTimer); voiceTimer = null; }
+    setVoiceBtnUI(false, '');
+}
+
+function cleanupVoiceStream() {
+    if (voiceStream) {
+        voiceStream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+        voiceStream = null;
+    }
+}
+
+async function handleVoiceChunks() {
+    cleanupVoiceStream();
+    if (!voiceChunks.length) { addSystemMessage('⚠️ 没有录到声音'); return; }
+    addSystemMessage('🎤 正在识别语音…');
+    const fd = new FormData();
+    fd.append('file', new Blob(voiceChunks, { type: 'audio/webm' }), 'voice.webm');
+    try {
+        const resp = await apiFetch('/api/voice/transcribe', { method: 'POST', body: fd });
+        const d = await resp.json().catch(() => ({}));
+        if (!resp.ok) { addSystemMessage(`⚠️ 语音识别失败：${d.detail || resp.status}`); return; }
+        const text = (d.text || '').trim();
+        if (!text) { addSystemMessage('⚠️ 未识别到内容，请靠近麦克风重试'); return; }
+        const ta = document.getElementById('chatInput');
+        const cur = ta.value.trim();
+        ta.value = cur ? cur + ' ' + text : text;
+        ta.focus({ preventScroll: true });
+        addSystemMessage(`🎤 已填入输入框（${text.length} 字），可修改后回车发送`);
+    } catch (err) {
+        addSystemMessage(`⚠️ 语音识别失败：${err.message}`);
+    }
+}
+
 // ===== 消息渲染 =====
 function addUserMessage(text, img, quote) {
     let html = `<div class="message user">`;
