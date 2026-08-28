@@ -36,10 +36,12 @@ def _default_config() -> dict:
             "base_url": "https://dashscope.aliyuncs.com",
             "api_key": settings.qwen_api_key or "",
             "model": "qwen3-asr-flash",
-            # 识别引擎：local = 本地 faster-whisper（免费/离线）；qwen = 千问云 API
+            # 视频字幕识别引擎：local = 本地 faster-whisper（免费/离线）；qwen = 千问云 API
             "provider": "local",
-            # provider=local 时的模型档位：small / medium
+            # provider=local 时的模型档位：small / medium / large-v3-turbo 等
             "size": "small",
+            # 语音输入（🎤）独立引擎：auto = 有千问 Key 走云（免费、零本地负担），否则本地；local / qwen 可强制
+            "voice_provider": "auto",
         },
     }
 
@@ -116,7 +118,7 @@ def public_view(cfg: dict) -> dict:
     out = {}
     for section, fields in (("main", ("base_url", "model", "multimodal")),
                             ("vision", ("enabled", "base_url", "model")),
-                            ("asr", ("base_url", "model", "provider", "size"))):
+                            ("asr", ("base_url", "model", "provider", "size", "voice_provider"))):
         s = cfg.get(section, {})
         item = {f: s.get(f) for f in fields}
         item["has_key"] = bool(s.get("api_key"))

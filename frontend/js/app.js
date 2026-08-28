@@ -1178,13 +1178,21 @@ function onImagePick(input) {
 function removeImage() { state.currentImage=null; state.currentImageFile=null;
     document.getElementById('imagePreview').style.display='none'; }
 
-// ===== 语音输入（浏览器录音 → 后端 Whisper/千问转文字 → 填入输入框）=====
+// ===== 语音输入（浏览器录音 → 后端 Whisper/千问转文字 → 填入输入框）
+// 实时草稿：本地引擎下每 2.5s 把「从开头到现在的完整音频」送转一次并刷新输入框
+// （边说边出字、边自我修正），点停止定稿；千问云为省配额保持「停止后整段转写」。
 let voiceRecorder = null;   // MediaRecorder
 let voiceChunks = [];
 let voiceStream = null;     // getUserMedia 流（停止时逐个 track.stop）
-let voiceTimer = null;
+let voiceTimer = null;      // 录音秒数计时
 let voiceSec = 0;
+let voiceLiveTimer = null;  // 实时草稿轮询
+let voiceLiveBusy = false;  // 上一轮草稿转写未返回时跳过本轮
+let voicePrefixTxt = '';    // 录音前输入框已有内容（草稿拼在其后）
+let voiceEngine = 'local';  // 当前 ASR 引擎（仅 local 开实时草稿）
+let voiceStopping = false;  // 停止/定稿流程标记
 const VOICE_MAX_SEC = 120;  // 最长录音 2 分钟（防忘关）
+const VOICE_LIVE_MS = 2500; // 实时草稿刷新间隔
 
 function voiceBtnEl() { return document.getElementById('voiceInputBtn'); }
 
@@ -1193,7 +1201,7 @@ function setVoiceBtnUI(recording, sec) {
     if (!btn) return;
     btn.classList.toggle('recording', recording);
     btn.textContent = recording ? `⏺${sec || ''}` : '🎤';
-    btn.title = recording ? '点击停止并识别' : '🎤 语音输入（录音后自动填入输入框）';
+    btn.title = recording ? '点击停止并定稿' : '🎤 语音输入（录音时边说边出字）';
 }
 
 async function toggleVoiceInput() {
@@ -1208,13 +1216,28 @@ async function toggleVoiceInput() {
         addSystemMessage('⚠️ 无法访问麦克风：请点浏览器地址栏的麦克风图标允许权限后重试');
         return;
     }
+    // 语音输入引擎按设置页独立配置解析（voice_provider：auto/local/qwen；auto = 有千问 Key 走云）
+    voiceEngine = await detectVoiceEngine();
+
     voiceChunks = [];
     voiceSec = 0;
+    voiceStopping = false;
+    const ta = document.getElementById('chatInput');
+    voicePrefixTxt = (ta.value || '').trim();
+    // 录音期间锁定输入框为只读的实时草稿态
+    ta.readOnly = true;
+    ta.classList.add('voice-live');
+    ta.placeholder = '🎤 识别中…说完点按钮定稿';
+
     const mr = new MediaRecorder(voiceStream);
     voiceRecorder = mr;
     mr.ondataavailable = (e) => { if (e.data && e.data.size) voiceChunks.push(e.data); };
-    mr.onstop = () => { voiceRecorder = null; handleVoiceChunks(); };
-    mr.onerror = () => { voiceRecorder = null; cleanupVoiceStream(); addSystemMessage('⚠️ 录音出错，请重试'); };
+    mr.onstop = () => { voiceRecorder = null; stopVoiceLive(); finalizeVoice(); };
+    mr.onerror = () => {
+        voiceRecorder = null; stopVoiceLive(); cleanupVoiceStream();
+        restoreVoiceInput();
+        addSystemMessage('⚠️ 录音出错，请重试');
+    };
     mr.start(250);  // 每 250ms 收集一次数据，防止过长录音丢数据
     setVoiceBtnUI(true, '');
     voiceTimer = setInterval(() => {
@@ -1222,11 +1245,66 @@ async function toggleVoiceInput() {
         setVoiceBtnUI(true, `${voiceSec}s`);
         if (voiceSec >= VOICE_MAX_SEC) stopVoiceInput();
     }, 1000);
-    addSystemMessage('🎤 录音中…说完再点一次按钮停止（最长 2 分钟）');
+    // 实时草稿：本地与千问云都支持（qwen3-asr-flash 免费模型，2.5s 串行一问压力极小）
+    voiceLiveTimer = setInterval(() => { voiceLiveTick(); }, VOICE_LIVE_MS);
+    setTimeout(() => voiceLiveTick(), 600);  // 尽快出第一版草稿
+    if (voiceEngine === 'qwen') {
+        addSystemMessage('🎤 录音中…千问云实时草稿（免费，电脑零负担），说完再点一次按钮定稿');
+    } else {
+        addSystemMessage('🎤 录音中…本地 Whisper 实时草稿（免费离线），说完再点一次按钮定稿');
+    }
+}
+
+// 语音输入引擎解析：按设置页 asr.voice_provider（auto/local/qwen）；
+// auto = 有千问 Key 走云（免费 qwen3-asr-flash），否则本地 Whisper
+async function detectVoiceEngine() {
+    try {
+        const resp = await apiFetch('/api/config/model');
+        const cfg = await resp.json().catch(() => ({}));
+        const asr = (cfg && cfg.asr) || {};
+        const vp = String(asr.voice_provider || 'auto').toLowerCase();
+        if (vp === 'qwen') return 'qwen';
+        if (vp === 'local') return 'local';
+        return asr.has_key ? 'qwen' : 'local';
+    } catch (e) { return 'local'; }
+}
+
+// 实时草稿：把「从头到现在的完整音频」整段重转，刷新输入框（结果永远是最新最准的）
+async function voiceLiveTick() {
+    if (voiceLiveBusy || voiceStopping || !voiceRecorder || voiceRecorder.state !== 'recording') return;
+    if (!voiceChunks.length) return;
+    voiceLiveBusy = true;
+    try {
+        const fd = new FormData();
+        fd.append('file', new Blob(voiceChunks, { type: 'audio/webm' }), 'voice.webm');
+        const resp = await apiFetch('/api/voice/transcribe', { method: 'POST', body: fd });
+        const d = await resp.json().catch(() => ({}));
+        if (resp.ok && d && d.text) {
+            const text = d.text.trim();
+            const ta = document.getElementById('chatInput');
+            ta.value = voicePrefixTxt ? voicePrefixTxt + ' ' + text : text;
+        }
+    } catch (e) {
+        // 草稿轮询静默失败：下一轮自动覆盖，不打断录音
+    }
+    voiceLiveBusy = false;
+}
+
+function stopVoiceLive() {
+    if (voiceLiveTimer) { clearInterval(voiceLiveTimer); voiceLiveTimer = null; }
+}
+
+function restoreVoiceInput() {
+    const ta = document.getElementById('chatInput');
+    if (!ta) return;
+    ta.readOnly = false;
+    ta.classList.remove('voice-live');
+    ta.placeholder = '输入问题，回车发送...';
 }
 
 function stopVoiceInput() {
     if (!voiceRecorder || voiceRecorder.state !== 'recording') return;
+    voiceStopping = true;
     try { voiceRecorder.stop(); } catch (e) {}
     if (voiceTimer) { clearInterval(voiceTimer); voiceTimer = null; }
     setVoiceBtnUI(false, '');
@@ -1239,10 +1317,15 @@ function cleanupVoiceStream() {
     }
 }
 
-async function handleVoiceChunks() {
+// 停止后的定稿：先恢复输入框，再发一次全量转写覆盖草稿（更准的最终版）
+async function finalizeVoice() {
+    // 等最后一轮草稿转写跑完（最多 3 秒），避免两处同时写输入框
+    const t0 = Date.now();
+    while (voiceLiveBusy && Date.now() - t0 < 3000) await new Promise(r => setTimeout(r, 100));
     cleanupVoiceStream();
+    restoreVoiceInput();
     if (!voiceChunks.length) { addSystemMessage('⚠️ 没有录到声音'); return; }
-    addSystemMessage('🎤 正在识别语音…');
+    addSystemMessage('🎤 正在定稿…');
     const fd = new FormData();
     fd.append('file', new Blob(voiceChunks, { type: 'audio/webm' }), 'voice.webm');
     try {
@@ -1252,8 +1335,7 @@ async function handleVoiceChunks() {
         const text = (d.text || '').trim();
         if (!text) { addSystemMessage('⚠️ 未识别到内容，请靠近麦克风重试'); return; }
         const ta = document.getElementById('chatInput');
-        const cur = ta.value.trim();
-        ta.value = cur ? cur + ' ' + text : text;
+        ta.value = voicePrefixTxt ? voicePrefixTxt + ' ' + text : text;
         ta.focus({ preventScroll: true });
         addSystemMessage(`🎤 已填入输入框（${text.length} 字），可修改后回车发送`);
     } catch (err) {
@@ -1743,6 +1825,8 @@ async function loadModelConfig() {
         if (ap) ap.value = (c.asr && c.asr.provider) || 'local';
         const asz = document.getElementById('setAsrSize');
         if (asz) asz.value = (c.asr && c.asr.size) || 'small';
+        const asv = document.getElementById('setAsrVoiceProvider');
+        if (asv) asv.value = (c.asr && c.asr.voice_provider) || 'auto';
         if (c.asr && !c.asr.has_key) document.getElementById('setAsrKey').placeholder = '尚未配置 Key';
     } catch (e) {}
 }
@@ -1818,6 +1902,7 @@ async function saveSettings() {
             model: document.getElementById('setAsrModel').value.trim(),
             provider: document.getElementById('setAsrProvider').value,
             size: document.getElementById('setAsrSize').value,
+            voice_provider: document.getElementById('setAsrVoiceProvider').value,
         },
     };
     try {

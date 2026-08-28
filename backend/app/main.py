@@ -17,7 +17,7 @@ from .api.routes import videos, chat, config, folders, voice
 DB_PATH = str(BASE_DIR / "data" / "kaoyan.db")
 FRONTEND_DIR = str(BASE_DIR / "frontend")
 
-app = FastAPI(title="考研学习平台", version="2.2.1")
+app = FastAPI(title="考研学习平台", version="2.2.2")
 
 # 退出时备份数据库（data/kaoyan.db.bak）
 def _backup_db():

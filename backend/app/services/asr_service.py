@@ -264,12 +264,33 @@ async def _transcribe_qwen(audio_data: bytes, audio_format: str) -> dict:
         raise
 
 
+def resolve_voice_engine() -> str:
+    """语音输入（🎤）的独立引擎选择（与视频字幕 asr.provider 解耦）。
+
+    asr.voice_provider 取值：
+      - "auto"（默认）：有千问 Key 走云（免费 qwen3-asr-flash，电脑零负担），否则本地 Whisper
+      - "local"：强制本地 Whisper（免费离线）
+      - "qwen"：强制千问云（需配置 Key）
+    """
+    cfg = load_model_config()["asr"]
+    vp = (cfg.get("voice_provider") or "auto").strip().lower()
+    if vp == "qwen":
+        return "qwen"
+    if vp == "local":
+        return "local"
+    return "qwen" if (cfg.get("api_key") or "").strip() else "local"
+
+
 async def transcribe_audio(
     audio_data: bytes,
     audio_format: str = "mp3",
     audio_path: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> dict:
-    """按 provider 选择识别引擎。
+    """按引擎选择识别引擎。
+
+    provider=None：用全局设置（asr.provider，视频字幕路径）；
+    provider="local"/"qwen"：显式指定（语音输入用 resolve_voice_engine() 的结果）。
 
     provider=local：本地 faster-whisper（需 audio_path），失败自动回退千问云；
     provider=qwen：走云 API。
@@ -278,13 +299,19 @@ async def transcribe_audio(
       local 的 chunks 每项含 start/end（精确时间轴，precise=True）；
       qwen 的 chunks 是 50 秒分段（start 为段起点）。
     """
-    provider, size = _asr_provider()
+    g_provider, size = _asr_provider()
+    if provider:
+        provider = provider.strip().lower()
+        if provider not in ("local", "qwen"):
+            provider = g_provider
+    else:
+        provider = g_provider
     if provider == "local":
         if audio_path and os.path.exists(audio_path):
             try:
                 return await _transcribe_local(audio_path, size)
             except Exception as e:
-                # 本地失败（模型未下载 / GPU 问题等）→ 回退云，保证字幕可用
+                # 本地失败（模型未下载 / GPU 问题等）→ 回退云，保证可用
                 print(f"[asr] 本地识别失败，回退千问云：{e}")
         else:
             print("[asr] provider=local 但未提供 audio_path，回退千问云")

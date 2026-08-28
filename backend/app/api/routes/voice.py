@@ -8,7 +8,7 @@ import tempfile
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
-from ...services.asr_service import transcribe_audio
+from ...services.asr_service import transcribe_audio, resolve_voice_engine
 
 router = APIRouter(prefix="/api/voice", tags=["语音输入"])
 
@@ -41,7 +41,11 @@ async def transcribe_voice(file: UploadFile = File(...)):
             tmp_path = f.name
             f.write(data)
 
-        result = await transcribe_audio(data, audio_format=ext, audio_path=tmp_path)
+        # 语音输入走设置页独立配置的引擎（voice_provider：auto/local/qwen），
+        # 与视频字幕的全局 ASR 引擎解耦
+        engine = resolve_voice_engine()
+        result = await transcribe_audio(data, audio_format=ext, audio_path=tmp_path,
+                                        provider=engine)
         if not result or not result.get("chunks"):
             raise HTTPException(500, "识别无结果")
         text = "".join(c.get("text", "") for c in result["chunks"]).strip()

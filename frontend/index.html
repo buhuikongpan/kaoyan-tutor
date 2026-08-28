@@ -5,7 +5,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>考研学习平台</title>
-    <link rel="stylesheet" href="css/style.css?v=12">
+    <link rel="stylesheet" href="css/style.css?v=13">
 </head>
 <body>
     <div class="app">
@@ -209,10 +209,16 @@
                 <div class="form-group">
                     <label>🎬 语音识别 ASR（视频字幕）</label>
                     <div class="form-card">
-                        <label>识别引擎</label>
+                        <label>识别引擎（视频字幕用）</label>
                         <select id="setAsrProvider">
                             <option value="local">本地 Whisper（免费 / 离线 / 字幕时间轴更准）</option>
-                            <option value="qwen">千问云 API（在线，按量计费）</option>
+                            <option value="qwen">千问云（qwen3-asr-flash 免费模型，在线）</option>
+                        </select>
+                        <label>🎤 语音输入引擎（独立于字幕；实时草稿也用它）</label>
+                        <select id="setAsrVoiceProvider">
+                            <option value="auto">自动（推荐）：有千问 Key 用云（免费，电脑零负担），否则本地</option>
+                            <option value="local">本地 Whisper（免费离线，占本机资源）</option>
+                            <option value="qwen">千问云（qwen3-asr-flash 免费，需填下方 Key）</option>
                         </select>
                         <label>本地模型档位（仅本地引擎生效；GPU 上 turbo 又快又准）</label>
                         <select id="setAsrSize">
@@ -273,7 +279,7 @@
     </div>
 
     <!-- 内联测试：验证 JS 是否能运行 -->
-    <script src="js/app.js?v=16"></script>
+    <script src="js/app.js?v=18"></script>
     <!-- KaTeX（本地化，不依赖 CDN，保证公式渲染稳定） -->
     <link rel="stylesheet" href="vendor/katex/katex.min.css">
     <script src="vendor/katex/katex.min.js" defer></script>

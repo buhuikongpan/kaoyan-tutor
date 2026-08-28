@@ -1174,3 +1174,10 @@ video::cue(b) {
     50% { box-shadow: 0 0 0 6px rgba(207, 19, 34, 0); }
 }
 @media (prefers-reduced-motion: reduce) { .btn-img.recording { animation: none; } }
+
+/* 语音输入实时草稿：输入框只读态样式 */
+textarea.voice-live {
+    font-style: italic;
+    color: #445;
+    background: #f2f6fc;
+}
