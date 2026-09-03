@@ -5,13 +5,14 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>考研学习平台</title>
-    <link rel="stylesheet" href="css/style.css?v=13">
+    <link rel="stylesheet" href="css/style.css?v=39">
 </head>
 <body>
     <div class="app">
         <!-- 顶部导航 -->
         <header class="header">
             <h1 class="logo">📚 考研学习平台</h1>
+            <button class="btn-drawer-video" onclick="openVideoDrawer()" aria-label="视频目录" title="视频目录">☰</button>
             <div class="header-center">
                 <!-- Agent 切换 -->
                 <nav class="mode-tabs" aria-label="问答模式切换">
@@ -26,6 +27,7 @@
                     <button class="subject-tab" data-subject="politics" onclick="switchSubject('politics')">🗳️ 政治</button>
                 </nav>
             </div>
+            <button class="btn-settings" onclick="toggleRotateLandscape()" aria-label="整站横屏旋转" title="整站横屏旋转">🔄</button>
             <button class="btn-settings" onclick="showSettings()" aria-label="模型设置">⚙️</button>
         </header>
 
@@ -58,9 +60,12 @@
             <!-- 中间：视频播放区 -->
             <div class="video-center">
                 <div class="video-player-wrapper" id="videoWrapper">
-                    <video id="videoPlayer" controls preload="auto">
+                    <video id="videoPlayer" preload="auto" playsinline webkit-playsinline x5-playsinline disablepictureinpicture>
                         您的浏览器不支持视频播放
                     </video>
+                    <div class="vc-spinner" id="vcSpinner" style="display:none" aria-label="缓冲中"><div class="spinner-ring"></div><span>缓冲中…</span></div>
+                    <div class="vc-tap-to-play" id="vcTapToPlay" style="display:none"><span class="tap-icon">▶</span><span>点击播放</span></div>
+                    <div class="vc-error" id="vcError" style="display:none"><span>⚠️ 视频加载失败</span><button class="vc-retry" onclick="retryVideo()">重试</button></div>
                     <div class="video-subtitle-overlay" id="videoSubtitleOverlay"></div>
                     <div class="video-controls-overlay" id="speedControls">
                         <button class="speed-btn" onclick="setSpeed(0.5)">0.5x</button>
@@ -72,10 +77,21 @@
                         <button class="speed-btn" onclick="setSpeed(4)">4x</button>
                         <button class="speed-btn" onclick="setSpeed(5)">5x</button>
                         <span class="speed-sep"></span>
+                        <button class="speed-btn" onclick="toggleFullscreen()" title="全屏（全屏后字幕/倍速/截图仍可用）" aria-label="全屏">⛶</button>
                         <button class="speed-btn" onclick="togglePip()" title="画中画" aria-label="画中画">🖼️</button>
                         <button class="speed-btn" onclick="toggleSubtitleOverlay()" title="字幕开关" aria-label="字幕开关">📄</button>
                         <button class="speed-btn" id="captureToggleBtn" onclick="toggleAutoCapture()" title="自动截图当前画面" aria-label="自动截图当前画面">🎥</button>
                     </div>
+                    <!-- 自绘控制条（底部）：播放/进度/时间——所有浏览器统一显示，不依赖系统播放器 -->
+                    <div class="vc-bar hide" id="vcBar">
+                        <button class="vc-btn-play" id="vcPlayBtn" onclick="togglePlay()" title="播放/暂停" aria-label="播放/暂停">▶</button>
+                        <button class="vc-btn-mute" id="vcMuteBtn" onclick="toggleMute()" title="静音" aria-label="静音">🔊</button>
+                        <input type="range" class="vc-volume" id="vcVolume" min="0" max="100" value="100" step="1" aria-label="音量" oninput="setVolume(this.value)">
+                        <input type="range" class="vc-progress" id="vcProgress" min="0" max="1000" value="0" step="1" aria-label="播放进度" oninput="seekFromSlider(this.value)">
+                        <span class="vc-time" id="vcTime">00:00 / 00:00</span>
+                    </div>
+                    <!-- 按住画面滑动时的进度提示浮层 -->
+                    <div class="vc-seek-tip" id="vcSeekTip" style="display:none"></div>
                     <div class="video-placeholder" id="videoPlaceholder">
                         <div class="placeholder-icon">🎬</div>
                         <div class="placeholder-text">从左侧选择视频开始学习</div>
@@ -127,6 +143,9 @@
                                 <label for="chatModelSelect">🤖 模型</label>
                                 <select id="chatModelSelect" onchange="onChatModelChange(this)"></select>
                                 <span class="model-picker-hint">会话级</span>
+                                <label for="chatEffortSelect">🧠 思考强度</label>
+                                <select id="chatEffortSelect" onchange="onChatEffortChange(this)"></select>
+                                <span class="model-picker-hint">会话级</span>
                             </div>
                             <div class="quote-bar" id="quoteBar" style="display:none">
                                 <span class="quote-bar-icon">📎</span>
@@ -151,7 +170,6 @@
                 </div>
             </div>
         </main>
-    </div>
 
     <!-- 通用操作弹层（替换原生 prompt/confirm，支持输入框/下拉/确认） -->
     <div class="modal-overlay" id="dialogModal" style="display:none" onclick="closeDialog(event)" role="dialog" aria-modal="true" aria-label="操作确认">
@@ -177,48 +195,50 @@
             </div>
             <div class="modal-body">
 
-                <div class="form-group">
-                    <label>🧠 主模型（聊天 / 总结推理）</label>
-                    <div class="form-card">
-                        <label>API 地址（可输 base 或完整 /chat/completions 全称）</label>
-                        <input type="text" id="setMainBaseUrl" placeholder="https://api.deepseek.com/v1 或完整 https://api.deepseek.com/v1/chat/completions">
-                        <label>API Key（留空 = 保持已有 Key）</label>
-                        <input type="password" id="setMainKey" placeholder="sk-...">
-                        <div class="model-row"><label>模型名称</label><button class="btn-sm" onclick="fetchModels('main')" title="从 API 拉取可用模型">🔍 获取模型</button></div>
-                        <input type="text" id="setMainModel" list="mainModelList" placeholder="可手输，或点「获取模型」自动拉取">
-                        <datalist id="mainModelList"></datalist>
+                <details class="provider-group" style="border:1px solid var(--color-border);border-radius:10px;padding:10px 12px;margin-bottom:12px">
+                    <summary style="cursor:pointer;font-size:14px;font-weight:600;padding:4px 0">🧠 文本（主模型）<b id="pgNameMain">未命名</b> <span class="pg-sum" id="pgSumMain" style="font-weight:400;font-size:12px;color:var(--color-text-muted)"></span></summary>
+                    <div class="form-card" style="margin-top:6px">
+                        <div style="font-size:12px;color:var(--color-text-muted);margin-bottom:4px">▼ 提供商列表（可多个；勾选「当前」生效；模型获取即录、勾选启停）</div>
+                        <div id="tierItemsText"></div>
+                        <button class="btn-sm btn-primary-sm" onclick="addTierProvider('text')" type="button">＋ 增加提供商</button>
                         <label class="checkbox-row"><input type="checkbox" id="setMainMultimodal"> 主模型支持多模态（可直接发图片，无需视觉辅助）</label>
                         <label class="checkbox-row"><input type="checkbox" id="setCompactA"> ⚡ 模式A 精简上下文：只发「课程总结 + 播放位置前后 ±10 分钟字幕」（回答更快更省，默认关闭）</label>
                     </div>
-                </div>
+                </details>
 
-                <div class="form-group">
-                    <label>👁️ 视觉辅助模型（看图；主模型支持多模态时可关闭）</label>
-                    <div class="form-card">
+                <details class="provider-group" style="border:1px solid var(--color-border);border-radius:10px;padding:10px 12px;margin-bottom:12px">
+                    <summary style="cursor:pointer;font-size:14px;font-weight:600;padding:4px 0">👁️ 视觉辅助<b id="pgNameVision">未命名</b> <span class="pg-sum" id="pgSumVision" style="font-weight:400;font-size:12px;color:var(--color-text-muted)"></span></summary>
+                    <div class="form-card" style="margin-top:6px">
                         <label class="checkbox-row"><input type="checkbox" id="setVisionEnabled" checked> 启用视觉辅助</label>
-                        <label>API 地址（可输 base 或完整 /chat/completions 全称）</label>
-                        <input type="text" id="setVisionBaseUrl" placeholder="https://open.bigmodel.cn/api/paas/v4 或完整端点">
-                        <label>API Key（留空 = 保持已有 Key）</label>
-                        <input type="password" id="setVisionKey" placeholder="...">
-                        <div class="model-row"><label>模型名称</label><button class="btn-sm" onclick="fetchModels('vision')" title="从 API 拉取可用模型">🔍 获取模型</button></div>
-                        <input type="text" id="setVisionModel" list="visionModelList" placeholder="可手输，或点「获取模型」自动拉取">
-                        <datalist id="visionModelList"></datalist>
+                        <div style="font-size:12px;color:var(--color-text-muted);margin:4px 0">▼ 提供商列表（可多个；勾选「当前」生效；模型获取即录、勾选启停）</div>
+                        <div id="tierItemsVision"></div>
+                        <button class="btn-sm btn-primary-sm" onclick="addTierProvider('vision')" type="button">＋ 增加提供商</button>
                     </div>
-                </div>
+                </details>
 
-                <div class="form-group">
-                    <label>🎬 语音识别 ASR（视频字幕）</label>
-                    <div class="form-card">
+                <details class="provider-group" style="border:1px solid var(--color-border);border-radius:10px;padding:10px 12px;margin-bottom:12px">
+                    <summary style="cursor:pointer;font-size:14px;font-weight:600;padding:4px 0">🎬 语音识别<b id="pgNameAsr">未命名</b> <span class="pg-sum" id="pgSumAsr" style="font-weight:400;font-size:12px;color:var(--color-text-muted)"></span></summary>
+                    <div class="form-card" style="margin-top:6px">
+                        <div style="font-size:12px;color:var(--color-text-muted);margin-bottom:4px">▼ 提供商列表（可多个；勾选「当前」生效；模型获取即录、勾选启停）</div>
+                        <div id="tierItemsAsr"></div>
+                        <button class="btn-sm btn-primary-sm" onclick="addTierProvider('asr')" type="button">＋ 增加提供商</button>
                         <label>识别引擎（视频字幕用）</label>
                         <select id="setAsrProvider">
+                            <option value="auto">自动降级链（推荐）：智谱 → 千问 → 腾讯 → 硅基流动 → 本地（跳过未配 Key 的）</option>
                             <option value="local">本地 Whisper（免费 / 离线 / 字幕时间轴更准）</option>
+                            <option value="zhipu">智谱云（GLM-ASR-2512，约 ¥0.03/百万tokens，免费额度以控制台为准）</option>
                             <option value="qwen">千问云（qwen3-asr-flash，约 ¥0.013/分钟）</option>
+                            <option value="tencent">腾讯云（实时语音识别极速版，需填下方腾讯三件套）</option>
+                            <option value="siliconflow">硅基流动（SenseVoiceSmall，OpenAI 兼容）</option>
                         </select>
                         <label>🎤 语音输入引擎（独立于字幕）</label>
                         <select id="setAsrVoiceProvider">
-                            <option value="auto">自动（推荐）：有千问 Key 用云（约 ¥0.013/分钟，电脑零负担），否则本地</option>
+                            <option value="auto">自动降级链（推荐）：智谱 → 千问 → 腾讯 → 硅基流动 → 本地（有 Key 的引擎优先）</option>
                             <option value="local">本地 Whisper（免费离线，实时草稿；占本机资源）</option>
-                            <option value="qwen">千问云（约 ¥0.013/分钟，无实时草稿，需填下方 Key）</option>
+                            <option value="zhipu">智谱云（GLM-ASR-2512）</option>
+                            <option value="qwen">千问云（qwen3-asr-flash）</option>
+                            <option value="tencent">腾讯云（实时语音识别极速版）</option>
+                            <option value="siliconflow">硅基流动（SenseVoiceSmall）</option>
                         </select>
                         <label>本地模型档位（仅本地引擎生效；GPU 上 turbo 又快又准）</label>
                         <select id="setAsrSize">
@@ -228,15 +248,29 @@
                             <option value="large-v3">large-v3（最准，最慢，显存要求高）</option>
                             <option value="distil-large-v3">distil-large-v3（最快，精度接近 large-v3）</option>
                         </select>
+                        <div style="font-size:12px;color:#999;margin:6px 0 2px">▼ 千问引擎配置（自动降级链第 2 位）</div>
                         <label>API 地址（可输 base 或完整端点）</label>
                         <input type="text" id="setAsrBaseUrl" placeholder="https://dashscope.aliyuncs.com 或完整端点">
-                        <label>API Key（留空 = 保持已有 Key）</label>
+                        <label>千问 API Key（留空 = 保持已有 Key）</label>
                         <input type="password" id="setAsrKey" placeholder="sk-...">
-                        <div class="model-row"><label>模型名称</label><button class="btn-sm" onclick="fetchModels('asr')" title="从 API 拉取可用模型">🔍 获取模型</button></div>
-                        <input type="text" id="setAsrModel" list="asrModelList" placeholder="可手输，或点「获取模型」自动拉取">
-                        <datalist id="asrModelList"></datalist>
+
+                        <details style="margin-top:8px">
+                            <summary style="cursor:pointer;font-size:13px;color:#666">⚙️ 其他云引擎凭据（选配；留空 = 该引擎不参与自动降级链）</summary>
+                            <div style="margin-top:8px">
+                                <label>智谱 API Key（GLM-ASR-2512，自动链第 1 位）</label>
+                                <input type="password" id="setAsrKeyZhipu" placeholder="...（与看图 Key 可相同）">
+                                <label>腾讯云 AppID</label>
+                                <input type="text" id="setAsrTencentAppId" placeholder="...">
+                                <label>腾讯云 SecretId</label>
+                                <input type="text" id="setAsrTencentSecretId" placeholder="AKID...">
+                                <label>腾讯云 SecretKey</label>
+                                <input type="password" id="setAsrTencentSecretKey" placeholder="...">
+                                <label>硅基流动 API Key（SenseVoiceSmall，自动链第 4 位）</label>
+                                <input type="password" id="setAsrKeySiliconflow" placeholder="sk-...">
+                            </div>
+                        </details>
                     </div>
-                </div>
+                </details>
 
                 <div class="form-group">
                     <label>⚡ 一键填充常用服务（填入地址与模型名；Key 仍需填写或保留已有）</label>
@@ -257,12 +291,17 @@
                     </div>
                 </div>
 
+
                 <div style="text-align:right;margin-top:14px">
                     <button class="btn-primary" onclick="saveSettings()">💾 保存配置</button>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- 移动端：抽屉遮罩 + 聊天悬浮按钮 -->
+    <div class="drawer-mask" id="drawerMask" onclick="closeDrawers()"></div>
+    <button class="chat-fab" id="chatFab" onclick="openChatDrawer()" aria-label="打开聊天" title="聊天">💬</button>
 
     <!-- 课程总结弹窗 -->
     <div class="modal-overlay" id="summaryModal" style="display:none" onclick="if(event.target===this) closeSummary()">
@@ -277,9 +316,10 @@
             </div>
         </div>
     </div>
+    </div>
 
     <!-- 内联测试：验证 JS 是否能运行 -->
-    <script src="js/app.js?v=18"></script>
+    <script src="js/app.js?v=35"></script>
     <!-- KaTeX（本地化，不依赖 CDN，保证公式渲染稳定） -->
     <link rel="stylesheet" href="vendor/katex/katex.min.css">
     <script src="vendor/katex/katex.min.js" defer></script>

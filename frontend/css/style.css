@@ -348,15 +348,15 @@ html, body {
 /* 视频悬浮字幕（全屏也可见） */
 .video-subtitle-overlay {
     position: absolute;
-    bottom: 60px;
+    bottom: 44px;
     left: 50%;
     transform: translateX(-50%);
-    max-width: 80%;
+    max-width: 96%;
     background: rgba(0, 0, 0, 0.5);
     color: #fff;
     padding: 6px 16px;
     border-radius: var(--radius-sm);
-    font-size: 1.1em;
+    font-size: clamp(14px, 4vmin, 19px);
     text-align: center;
     line-height: 1.5;
     pointer-events: none;
@@ -365,11 +365,11 @@ html, body {
     white-space: pre-wrap;
 }
 
-/* 容器全屏时字幕（容器包含视频+字幕，自然可见） */
+/* 容器全屏时字幕（容器包含视频+字幕，自然可见）——与普通模式同参数 */
 .video-subtitle-overlay.fullscreen {
-    font-size: 1.8em;
-    bottom: 80px;
-    max-width: 90%;
+    font-size: clamp(14px, 4vmin, 19px);
+    bottom: 44px;
+    max-width: 96%;
     z-index: 100;
 }
 
@@ -403,7 +403,8 @@ video::cue(b) {
 }
 .video-controls-overlay {
     position: absolute;
-    bottom: 40px;
+    top: 12px;
+    bottom: auto;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
@@ -414,10 +415,14 @@ video::cue(b) {
     opacity: 0;
     transition: opacity 0.2s;
     pointer-events: none;
+    z-index: 5;   /* 强制在视频之上（全屏时浏览器会给视频提升渲染层） */
 }
-.video-player-wrapper:hover .video-controls-overlay {
-    opacity: 1;
-    pointer-events: auto;
+/* 仅真鼠标设备支持 hover 显示（触摸设备没有 hover，由 JS 点击唤出，避免触摸残留 hover 卡住按钮） */
+@media (hover: hover) {
+    .video-player-wrapper:hover .video-controls-overlay {
+        opacity: 1;
+        pointer-events: auto;
+    }
 }
 .speed-btn {
     padding: 3px 8px;
@@ -772,7 +777,7 @@ video::cue(b) {
 .model-picker-row select {
     flex: 1;
     min-width: 0;
-    max-width: 420px;
+    max-width: 300px;
     padding: 5px 8px;
     border: 1px solid #ccd8ef;
     border-radius: 8px;
@@ -782,6 +787,8 @@ video::cue(b) {
     cursor: pointer;
 }
 .model-picker-row select:focus { outline: none; border-color: #8fa8d8; }
+/* 思考强度下拉：比模型下拉略窄，默认宽度不用占满行 */
+.model-picker-row #chatEffortSelect { max-width: 148px; flex: none; }
 .model-picker-hint {
     flex: none;
     font-size: 11px;
@@ -1180,4 +1187,590 @@ textarea.voice-live {
     font-style: italic;
     color: #445;
     background: #f2f6fc;
+}
+
+/* ================================================================
+   移动端适配（≤900px）：三栏 → 抽屉式（视频目录左抽屉 / 聊天右抽屉）
+   桌面 >900px 完全不受影响
+   ================================================================ */
+@media (max-width: 900px) {
+    /* ---- 头部：紧凑 + tab 横滑 ---- */
+    .header {
+        height: auto;
+        flex-wrap: wrap;
+        padding: 6px 8px;
+        gap: 6px;
+    }
+    .logo { font-size: 15px; }
+    .btn-drawer-video {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px; height: 34px;
+        border: none; border-radius: 8px;
+        background: rgba(255,255,255,.18);
+        color: #fff; font-size: 18px;
+        cursor: pointer;
+    }
+    .header-center {
+        order: 3;
+        width: 100%;
+        min-width: 0;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .mode-tabs, .subject-tabs {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    .mode-tabs::-webkit-scrollbar, .subject-tabs::-webkit-scrollbar { display: none; }
+    .mode-tab, .subject-tab { flex: 0 0 auto; padding: 5px 10px; font-size: 12.5px; }
+
+    /* ---- 视频目录 → 左侧抽屉 ---- */
+    .video-sidebar {
+        position: fixed !important;
+        left: 0; top: 0; bottom: 0;
+        width: min(85vw, 340px) !important;
+        z-index: 200;
+        transform: translateX(-105%);
+        transition: transform .25s ease;
+        box-shadow: 2px 0 16px rgba(0,0,0,.18);
+        background: var(--color-surface);
+    }
+    .video-sidebar.drawer-open { transform: translateX(0); }
+
+    /* ---- 聊天区 → 右侧抽屉 ---- */
+    .chat-panel {
+        position: fixed !important;
+        right: 0; top: 0; bottom: 0;
+        width: min(88vw, 420px) !important;
+        min-width: 0 !important;
+        z-index: 200;
+        transform: translateX(105%);
+        transition: transform .25s ease;
+        box-shadow: -2px 0 16px rgba(0,0,0,.18);
+        background: var(--color-surface);
+    }
+    .chat-panel.drawer-open { transform: translateX(0); }
+
+    /* ---- 播放区：占满剩余宽度 ---- */
+    .video-center { flex: 1 1 auto; width: 100% !important; min-width: 0; }
+    .splitter { display: none; }
+
+    /* ---- 遮罩 ---- */
+    .drawer-mask {
+        position: fixed; inset: 0;
+        z-index: 150;
+        background: rgba(0,0,0,.35);
+        opacity: 0; pointer-events: none;
+        transition: opacity .2s;
+    }
+    .drawer-mask.show { opacity: 1; pointer-events: auto; }
+
+    /* ---- 聊天悬浮按钮（视频目录按钮在 header 里） ---- */
+    .chat-fab {
+        position: fixed;
+        right: 14px; bottom: 18px;
+        z-index: 130;
+        width: 52px; height: 52px;
+        border: none; border-radius: 50%;
+        background: var(--color-primary);
+        color: #fff; font-size: 22px;
+        display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 4px 14px rgba(26,115,232,.35);
+        cursor: pointer;
+    }
+    .chat-fab:active { transform: scale(.94); }
+}
+
+/* 桌面端隐藏移动控件 */
+.btn-drawer-video, .drawer-mask, .chat-fab { display: none; }
+@media (max-width: 900px) {
+    .btn-drawer-video { display: inline-flex; }
+    .drawer-mask { display: block; }
+    .chat-fab { display: flex; }
+}
+
+/* ================================================================
+   手机横屏（≤900px 且横向）：头部单行 / 抽屉收窄 / 浮钮避让进度条
+   ================================================================ */
+@media (max-width: 900px) and (orientation: landscape) {
+    /* 头部：单行紧凑，给视频让出高度 */
+    .header { flex-wrap: nowrap; padding: 4px 8px; }
+    .logo { font-size: 13px; }
+    .header-center {
+        order: 0;
+        width: auto;
+        flex: 1;
+        min-width: 0;
+        flex-direction: row;
+        gap: 4px;
+    }
+    .mode-tab, .subject-tab { padding: 4px 9px; font-size: 12px; }
+
+    /* 抽屉收窄：横屏宽度大，不再需要 85vw 全宽 */
+    .video-sidebar { width: min(52vw, 400px) !important; }
+    .chat-panel { width: min(56vw, 440px) !important; }
+
+    /* 聊天浮钮：挪到右上，避开底部原生进度条 */
+    .chat-fab {
+        bottom: auto;
+        top: 58px;
+        right: 10px;
+        width: 44px; height: 44px;
+        font-size: 18px;
+    }
+
+    /* 播放区给足高度 */
+    .video-center { padding: 4px; gap: 4px; }
+}
+
+/* ================================================================
+   手动横屏旋转（向浏览器申请全屏 + 旋转整个应用 90°）
+   适配不支持自动横屏的浏览器 / WebView；退出全屏自动还原
+   ================================================================ */
+html.rotate-landscape {
+    background: #000;
+}
+/* 竖屏视口：整站顺时针转 90° 横屏铺满（横握手机即正立） */
+html.rotate-landscape body {
+    margin: 0;
+    overflow: hidden;
+}
+html.rotate-landscape .app {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vh;            /* 竖视口的高 → 旋转后水平铺满屏宽 */
+    height: 100vw;           /* 竖视口的宽 → 旋转后垂直铺满屏高 */
+    transform: rotate(90deg) translateY(-100%);
+    transform-origin: 0 0;
+    background: var(--color-bg);
+}
+/* 旋转后：视频铺满播放容器，object-fit 完整显示不裁切（横屏高度矮，默认 16:9 自动高会溢出） */
+/* 竖屏旋转态：main 高 = 视口高 - header（100vw=视口宽，仅竖屏有效） */
+@media (orientation: portrait) {
+    html.rotate-landscape .main-content { height: calc(100vw - 52px); min-height: 0; }
+}
+/* 横屏旋转态：main 铺满剩余高度（100vw 会算成屏幕宽度，绝不能当高度用） */
+html.rotate-landscape .main-content { flex: 1; min-height: 0; }
+html.rotate-landscape .video-center { padding: 0; gap: 0; height: 100%; min-height: 0; }
+html.rotate-landscape .video-player-wrapper {
+    height: 100%;
+    min-height: 0;
+    box-shadow: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+html.rotate-landscape #videoPlayer {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    background: #000;
+}
+/* 横屏视口（手机已横放 / 桌面宽屏）：内容本已横屏，保持原样，不旋转（避免 180° 混乱） */
+@media (orientation: landscape) {
+    html.rotate-landscape .app {
+        position: static;
+        width: auto;
+        height: 100vh;         /* 横屏：应用占满视口高度，main 才能 flex 撑满 */
+        transform: none;
+    }
+}
+/* 旋转横屏时保留所有入口按钮（文件树☰ / 聊天💬 / 设置⚙️ 全部可见可用） */
+
+/* ================================================================
+   全屏容器（⛶ 按钮）：全屏后字幕/倍速/截图等自绘控件仍可见
+   手机 tap 唤出控制条（原生无 hover）
+   ================================================================ */
+.video-controls-overlay.show {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+#videoWrapper:fullscreen,
+#videoWrapper:-webkit-full-screen {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+}
+#videoWrapper:fullscreen video,
+#videoWrapper:-webkit-full-screen video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+/* 全屏：控制条位置顶部（显隐交给 JS：点屏幕唤出、自动隐藏） */
+#videoWrapper:fullscreen .video-controls-overlay,
+#videoWrapper:-webkit-full-screen .video-controls-overlay {
+    bottom: auto;
+    top: 12px;
+}
+/* 全屏时字幕上移避开底部控制条 */
+#videoWrapper:fullscreen .video-subtitle-overlay,
+#videoWrapper:-webkit-full-screen .video-subtitle-overlay {
+    bottom: 44px;
+}
+
+/* ================================================================
+   自绘播放器控制条（底部）：播放/进度/时间——所有浏览器统一显示
+   ================================================================ */
+.vc-bar {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: linear-gradient(0deg, rgba(0,0,0,.72), rgba(0,0,0,0));
+    z-index: 5;
+    transition: opacity .2s;
+}
+.vc-bar.hide, .video-controls-overlay.hide { opacity: 0 !important; pointer-events: none !important; }
+.vc-btn-play {
+    width: 40px; height: 40px;
+    flex-shrink: 0;
+    border: none; border-radius: 50%;
+    background: rgba(255,255,255,.22);
+    color: #fff; font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+}
+.vc-btn-play:active { background: rgba(255,255,255,.4); }
+.vc-progress {
+    flex: 1;
+    min-width: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255,255,255,.35);
+    outline: none;
+    cursor: pointer;
+}
+.vc-progress::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    border: none;
+}
+.vc-progress::-moz-range-thumb {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    border: none;
+}
+.vc-time {
+    flex-shrink: 0;
+    color: #fff;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+/* 全屏：进度条显隐交给 JS（点屏幕唤出、自动隐藏），不强制常显 */
+/* 移动端：控制条更高可点 */
+@media (max-width: 900px) {
+    .vc-bar { padding: 12px; }
+    .vc-btn-play { width: 44px; height: 44px; font-size: 17px; }
+    .vc-progress { height: 6px; }
+}
+
+/* 旋转/全屏统一：控制条显隐由 JS 管理（点屏幕唤出、自动隐藏） */
+
+/* ================================================================
+   按住画面滑动 seek 的提示浮层（短视频式拖动机进度）
+   ================================================================ */
+.vc-seek-tip {
+    position: absolute;
+    top: 42%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,.78);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    z-index: 6;
+    pointer-events: none;
+    white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0,0,0,.3);
+}
+
+/* ================================================================
+   彻底隐藏浏览器原生媒体控件（WebKit/Blink 全军覆没）
+   ================================================================ */
+video::-webkit-media-controls,
+video::-webkit-media-controls-enclosure,
+video::-webkit-media-controls-panel,
+video::-webkit-media-controls-start-playback-button,
+video::-webkit-media-controls-overlay-play-button,
+video::-webkit-media-controls-play-button,
+video::-webkit-media-controls-mute-button,
+video::-webkit-media-controls-volume-slider,
+video::-webkit-media-controls-fullscreen-button,
+video::-webkit-media-controls-timeline,
+video::-webkit-media-controls-current-time-display,
+video::-webkit-media-controls-time-remaining-display,
+video::-webkit-media-controls-toggle-closed-captions-button,
+video::-webkit-media-controls-rewind-button {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+video::-webkit-media-controls { -webkit-appearance: none; appearance: none; }
+
+/* ================================================================
+   自绘补充层：缓冲 spinner / 点击播放 / 错误重试
+   ================================================================ */
+.vc-spinner {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 7;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    color: #fff; font-size: 13px;
+    text-shadow: 0 1px 4px rgba(0,0,0,.5);
+    pointer-events: none;
+}
+.spinner-ring {
+    width: 42px; height: 42px;
+    border: 4px solid rgba(255,255,255,.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: vc-spin .8s linear infinite;
+}
+@keyframes vc-spin { to { transform: rotate(360deg); } }
+.vc-tap-to-play {
+    position: absolute; inset: 0;
+    z-index: 8;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    background: rgba(0,0,0,.35);
+    color: #fff; cursor: pointer;
+}
+.vc-tap-to-play .tap-icon {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.25);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px;
+    box-shadow: 0 4px 20px rgba(0,0,0,.3);
+}
+.vc-error {
+    position: absolute; inset: 0;
+    z-index: 9;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    background: rgba(0,0,0,.65);
+    color: #fff; font-size: 15px;
+}
+.vc-retry {
+    padding: 8px 22px;
+    border: none; border-radius: 20px;
+    background: var(--color-primary); color: #fff;
+    font-size: 14px; cursor: pointer;
+}
+
+/* ================================================================
+   自绘音量控制
+   ================================================================ */
+.vc-btn-mute {
+    width: 34px; height: 34px;
+    flex-shrink: 0;
+    border: none; border-radius: 50%;
+    background: rgba(255,255,255,.18);
+    color: #fff; font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+}
+.vc-volume {
+    flex-shrink: 0;
+    width: 74px;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255,255,255,.35);
+    outline: none; cursor: pointer;
+}
+.vc-volume::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: #fff; border: none;
+}
+.vc-volume::-moz-range-thumb {
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: #fff; border: none;
+}
+@media (max-width: 900px) {
+    .vc-volume { width: 56px; }
+}
+
+/* ================================================================
+   全屏/旋转下控制条显隐统一由 JS 控制：点屏幕唤出、播放中自动隐藏
+   （不再强制常显，避免遮挡）
+   ================================================================ */
+
+/* 旋转=整站横屏：保留完整网站（头部/目录/聊天全部跟随旋转，不裁剪） */
+/* （此处理解：用户要的是整站旋转观看，播放器与全站一体横屏） */
+
+/* ================================================================
+   手机播放器适配：顶部按钮排横向滚动 + 底部控制条精简
+   ================================================================ */
+@media (max-width: 900px) {
+    /* 顶部按钮排：横滑，按钮不被裁切 */
+    .video-controls-overlay {
+        max-width: calc(100% - 24px);
+        left: 12px;
+        transform: none;
+        justify-content: flex-start;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        flex-wrap: nowrap;
+        scrollbar-width: none;
+    }
+    .video-controls-overlay::-webkit-scrollbar { display: none; }
+    .video-controls-overlay .speed-btn { flex: 0 0 auto; }
+    .speed-btn { font-size: 12.5px; padding: 6px 10px; }
+
+    /* 底部：音量用手机系统键（保留静音钮做快捷），时间精简 */
+    .vc-volume { display: none; }
+    .vc-time { font-size: 11px; }
+    .vc-bar { gap: 8px; }
+}
+
+/* 可见态 class：强制显示 + 可点击（手机无 hover，必须走显式 class） */
+.video-controls-overlay.ctrl-visible {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+}
+
+/* 手机：所有弹窗不超屏（覆盖 inline max-width） */
+@media (max-width: 900px) {
+    .modal-content { max-width: 92vw !important; width: 92vw; max-height: 86vh; overflow: auto; }
+}
+
+/* 全屏/旋转：禁用 hover 常显，控制条显隐完全由 JS 控制（点击唤出→自动隐藏） */
+#videoWrapper:fullscreen .video-controls-overlay,
+#videoWrapper:-webkit-full-screen .video-controls-overlay,
+html.rotate-landscape .video-controls-overlay {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* ================================================================
+   UI 打磨：触控区域最低 40-44px / 发布可见焦点 / 输入框防 iOS 缩放
+   ================================================================ */
+/* 通用输入框：明显可点 + 16px 防 iOS 自动缩放 */
+#settingsModal input[type="text"],
+#settingsModal input[type="password"],
+#settingsModal select,
+#settingsModal textarea,
+#settingsModal .tier-name,
+#settingsModal .tier-base,
+#settingsModal .tier-key,
+#settingsModal .tier-addmodel {
+    min-height: 42px;
+    font-size: 16px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border-strong);
+    padding: 8px 10px;
+    background: #fff;
+    color: var(--color-text);
+    transition: border-color .15s, box-shadow .15s;
+}
+#settingsModal input:focus,
+#settingsModal select:focus,
+#settingsModal textarea:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(26,115,232,.18);
+}
+/* 按钮：触控区 >= 40px + 点击反馈 + 不被 flex 压缩 + 文字不换行 */
+#settingsModal .btn-sm {
+    flex-shrink: 0;
+    white-space: nowrap;
+    min-height: 38px;
+    min-width: 38px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-surface-alt);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font-size: 13px;
+    transition: background .12s;
+}
+#settingsModal .btn-sm:active { background: var(--color-primary-ghost); }
+#settingsModal .btn-sm.btn-primary-sm {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: #fff;
+    font-weight: 600;
+}
+/* 「获取模型」按钮：更醒目，放得下“获取模型”四字 */
+#settingsModal .tier-fetch {
+    flex-shrink: 0;
+    padding: 6px 14px;
+    font-weight: 600;
+    font-size: 13px;
+    background: var(--color-primary-soft);
+    border-color: transparent;
+    color: var(--color-primary);
+}
+#settingsModal .tier-fetch:active { background: var(--color-primary); color: #fff; }
+/* 提供商分组（details）外观 */
+#settingsModal details.provider-group > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+}
+#settingsModal details.provider-group > summary::-webkit-details-marker { display: none; }
+#settingsModal details.provider-group > summary::before {
+    content: '▸';
+    color: var(--color-primary);
+    font-size: 12px;
+    transition: transform .15s;
+}
+#settingsModal details.provider-group[open] > summary::before { transform: rotate(90deg); }
+#settingsModal .pg-name { color: var(--color-primary); font-weight: 600; }
+/* 条目卡片：勾选行可点区域放宽 */
+#settingsModal .tier-card label.checkbox-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+#settingsModal .tier-card label.checkbox-row:hover { background: var(--color-primary-faint); }
+#settingsModal .tier-card label.checkbox-row input { width: 18px; height: 18px; accent-color: var(--color-primary); }
+/* 增加按钮（每层）粗体醒目 */
+#settingsModal .form-card > .btn-primary-sm {
+    margin-top: 2px;
+    width: 100%;
+    padding: 10px;
+    font-size: 14px;
+}
+/* 手机端：触控区更大 44px */
+@media (max-width: 900px) {
+    #settingsModal input[type="text"],
+    #settingsModal input[type="password"],
+    #settingsModal select {
+        min-height: 44px;
+        font-size: 16px;
+    }
+    #settingsModal .btn-sm { min-height: 44px; }
+    #settingsModal .tier-card { padding: 10px 12px; }
 }

@@ -16,6 +16,7 @@ const state = {
     uploadController: null,
     currentFolderId: 0,  // 当前选中的文件夹
     convModel: '',       // 当前会话的模型（空 = 全局主模型）
+    convEffort: '',      // 当前会话的思考强度（空 = 全局默认 high）
     globalModel: '',     // 全局主模型名（下拉兜底显示）
 };
 
@@ -45,7 +46,7 @@ function resetViewportScroll() {
         document.body.scrollTop = 0;
     } catch (e) {}
 }
-document.addEventListener('DOMContentLoaded', () => { resetViewportScroll(); switchMode('A'); setupSplitters(); initConvResizer(); restoreConvSidebarState(); loadChatModelList(); loadTree().then(() => restoreActiveConversation()); });
+document.addEventListener('DOMContentLoaded', () => { resetViewportScroll(); switchMode('A'); setupSplitters(); initConvResizer(); restoreConvSidebarState(); initChatEffortSelect(); loadChatModelList(); loadTree().then(() => restoreActiveConversation()); });
 
 // 终极兜底：任何时刻 document 被滚动（滚动锚定/浏览器内部行为），立即拉回顶部。
 // 用 capture 阶段监听，抢在浏览器完成滚动渲染前复位，防止顶部导航被顶出屏幕、视频滚出视口后黑屏。
@@ -121,6 +122,7 @@ function switchSubject(subject) {
     state.subject = subject;
     state.conversationId = '';
     state.convModel = '';
+    state.convEffort = '';
     state.messages = [];
     state.subtitles = [];
     state.currentFolderId = 0;
@@ -136,6 +138,7 @@ function switchMode(mode) {
     state.mode = mode;
     state.conversationId = '';
     state.convModel = '';
+    state.convEffort = '';
     state.messages = [];
     document.querySelectorAll('.mode-tab').forEach(el => el.classList.toggle('active', el.dataset.mode === mode));
     const names = { A: '💬 即时问答', B: '🎯 引导输出', C: '📝 课后问答' };
@@ -224,9 +227,14 @@ function renderTree(data, q) {
     }
 }
 
+// F4：视频搜索防抖（200ms），避免每敲一键全量重渲染整个树
+let videoSearchTimer = null;
 function onVideoSearch(v) {
     if (!treeCache) return;
-    renderTree(treeCache, (v || '').trim().toLowerCase());
+    clearTimeout(videoSearchTimer);
+    videoSearchTimer = setTimeout(() => {
+        renderTree(treeCache, (v || '').trim().toLowerCase());
+    }, 200);
 }
 
 function renderFolderNode(f, depth, q) {
@@ -396,6 +404,7 @@ async function moveVideoDialog(videoId) {
 async function playVideo(videoId) {
     state.currentVideoId = videoId;
     document.querySelectorAll('.tree-video').forEach(el => el.classList.toggle('active', parseInt(el.dataset.videoId) === videoId));
+    closeVideoDrawer(); // 移动端：选完视频自动收起目录抽屉
 
     const video = document.getElementById('videoPlayer');
     const placeholder = document.getElementById('videoPlaceholder');
@@ -418,14 +427,17 @@ async function playVideo(videoId) {
         } else if (savedPos > 2) {
             video.currentTime = savedPos;
         }
-        video.play();
+        video.controls = false; // 防御：确保任何情况下系统播放器不出现
+        const vp = video.play();
+        if (vp && vp.catch) vp.catch(() => { if (window.__vcOnPlayRejected) window.__vcOnPlayRejected(); });
         video.onerror = null; // 成功加载后移除错误处理器
     };
 
-    // 加载失败时保持占位符可见并提示
+    // 加载失败：占位提示 + 统一错误层（带重试按钮）
     video.onerror = () => {
         video.style.display = 'none';
         placeholder.style.display = 'flex';
+        if (window.__vcShowError) window.__vcShowError();
         addSystemMessage(`⚠️ 视频加载失败，请检查网络或访问令牌`);
     };
 
@@ -465,6 +477,9 @@ async function loadSubtitles(videoId) {
 function renderSubtitles() {
     const list = document.getElementById('subtitleList');
     const count = document.getElementById('subtitleCount');
+    // 列表即将重建，先使 F2 的节点缓存与高亮失效
+    subtitleItems = null;
+    subtitleLastActiveIdx = -1;
     if (!state.subtitles.length) { list.innerHTML = '<div class="empty-state">无字幕</div>'; return; }
     count.textContent = `${state.subtitles.length} 段`;
     list.innerHTML = '';
@@ -495,19 +510,50 @@ function toggleAutoCapture() {
     }
 }
 
-async function togglePip() {
+// ===== 全屏（容器全屏：全屏后字幕/倍速/截图按钮仍在） =====
+function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+           (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+function toggleFullscreen() {
     const wrapper = document.getElementById('videoWrapper');
     if (!wrapper) return;
+    if (isFullscreen()) {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        return;
+    }
+    if (isIOS()) {
+        addSystemMessage('⚠️ iOS Safari 不支持页面全屏，请用 🔄 横屏旋转，或点视频系统控制条的全屏');
+        return;
+    }
+    // 全屏与旋转互斥：进全屏前解除旋转态
+    document.documentElement.classList.remove('rotate-landscape');
     try {
-        if (document.fullscreenElement || document.webkitFullscreenElement) {
-            if (document.exitFullscreen) document.exitFullscreen();
-            else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-        } else {
-            if (wrapper.requestFullscreen) wrapper.requestFullscreen();
-            else if (wrapper.webkitRequestFullscreen) wrapper.webkitRequestFullscreen();
-        }
+        if (wrapper.requestFullscreen) wrapper.requestFullscreen();
+        else if (wrapper.webkitRequestFullscreen) wrapper.webkitRequestFullscreen();
+        else addSystemMessage('⚠️ 当前浏览器不支持全屏');
     } catch (e) {
-        addSystemMessage(`⚠️ 全屏不支持: ${e.message}`);
+        addSystemMessage('⚠️ 全屏失败: ' + e.message);
+    }
+}
+
+async function togglePip() {
+    const video = document.getElementById('videoPlayer');
+    if (!video) return;
+    try {
+        // Chrome/Edge/Android WebView：标准 Picture-in-Picture
+        if (document.pictureInPictureElement) { await document.exitPictureInPicture(); return; }
+        if (video.requestPictureInPicture) { await video.requestPictureInPicture(); return; }
+        // Safari：webkitSetPresentationMode
+        if (video.webkitSupportsPresentationMode && video.webkitSetPresentationMode) {
+            const mode = video.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture';
+            video.webkitSetPresentationMode(mode);
+            return;
+        }
+        addSystemMessage('⚠️ 当前浏览器不支持画中画');
+    } catch (e) {
+        addSystemMessage('⚠️ 画中画失败: ' + e.message);
     }
 }
 
@@ -519,6 +565,7 @@ function toggleSubtitleOverlay() {
     subtitleOverlayVisible = !subtitleOverlayVisible;
     overlay.style.display = subtitleOverlayVisible ? 'block' : 'none';
 }
+
 
 // ===== 倍速控制 =====
 let currentSpeed = 1;
@@ -557,6 +604,9 @@ function fmtTime(s) {
 
 // 高亮当前字幕 + 视频悬浮字幕
 let subtitleHighlightTimer = null;
+// F2：字幕项节点缓存（renderSubtitles 重建列表时清空） + 上次高亮下标
+let subtitleItems = null;
+let subtitleLastActiveIdx = -1;
 
 // 全屏状态检测
 function isFullscreen() {
@@ -574,26 +624,41 @@ document.addEventListener('DOMContentLoaded', () => {
         subtitleHighlightTimer = setTimeout(() => {
             subtitleHighlightTimer = null;
             const t = document.getElementById('videoPlayer').currentTime;
+            // F2：二分定位当前字幕（字幕按 seq/start 升序），替代逐条线性遍历
             let activeIdx = -1;
-            state.subtitles.forEach((s, i) => { if (t >= s.start && t <= s.end) activeIdx = i; });
-            
-            // 更新字幕列表高亮
-            document.querySelectorAll('.subtitle-item').forEach(el => el.classList.remove('active'));
-            if (activeIdx >= 0) {
-                const active = document.querySelector(`.subtitle-item[data-seq="${activeIdx}"]`);
-                if (active) {
-                    active.classList.add('active');
-                    // 只滚动字幕列表容器本身：scrollIntoView 会冒泡滚动 document 视口（CSS overflow:hidden 挡不住编程滚动），
-                    // 把顶部导航顶出屏幕，出现"界面被拉起只剩一半"。改用容器内 scrollTop 计算
-                    const list = document.getElementById('subtitleList');
-                    if (list) {
-                        const t = active.offsetTop - list.clientHeight / 2 + active.clientHeight / 2;
-                        list.scrollTop = t > 0 ? t : 0;
-                    }
-                    resetViewportScroll();
+            {
+                let lo = 0, hi = state.subtitles.length - 1;
+                while (lo <= hi) {
+                    const mid = (lo + hi) >> 1;
+                    if (state.subtitles[mid].start <= t) { activeIdx = mid; lo = mid + 1; }
+                    else hi = mid - 1;
+                }
+                if (activeIdx >= 0 && t > state.subtitles[activeIdx].end) activeIdx = -1;
+            }
+
+            // F2：缓存字幕项节点数组 + 只 toggle 上/当前两个节点（替代每次 querySelectorAll 全量清类）
+            if (!subtitleItems) subtitleItems = Array.from(document.querySelectorAll('.subtitle-item'));
+            if (subtitleLastActiveIdx >= 0 && subtitleLastActiveIdx < subtitleItems.length) {
+                if (subtitleItems[subtitleLastActiveIdx].classList.contains('active')) {
+                    subtitleItems[subtitleLastActiveIdx].classList.remove('active');
                 }
             }
-            
+            if (activeIdx >= 0 && activeIdx < subtitleItems.length && subtitleItems[activeIdx]) {
+                subtitleItems[activeIdx].classList.add('active');
+                subtitleLastActiveIdx = activeIdx;
+                // 只滚动字幕列表容器本身：scrollIntoView 会冒泡滚动 document 视口（CSS overflow:hidden 挡不住编程滚动），
+                // 把顶部导航顶出屏幕，出现"界面被拉起只剩一半"。改用容器内 scrollTop 计算
+                const list = document.getElementById('subtitleList');
+                if (list && subtitleItems[activeIdx]) {
+                    const el = subtitleItems[activeIdx];
+                    const ltop = el.offsetTop - list.clientHeight / 2 + el.clientHeight / 2;
+                    list.scrollTop = ltop > 0 ? ltop : 0;
+                }
+                resetViewportScroll();
+            } else {
+                subtitleLastActiveIdx = -1;
+            }
+
             // 更新视频悬浮字幕
             const overlay = document.getElementById('videoSubtitleOverlay');
             const subtitlePanel = document.getElementById('subtitlePanel');
@@ -910,7 +975,46 @@ async function sendMessage() {
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        // F1 流式增量渲染状态：
+        //   raw           —— 已收到的全部原生（未转义）正文
+        //   baseStableDom —— 已"稳定闭合"的渲染容器（仅 append，不重建，避免 O(n²)）
+        //   activeDom     —— 尾部"可能未闭合公式"的活动区（每次用 innerHTML 重建，通常只有几十字）
+        //   activeStart   —— activeDom 起始位置对应到 raw 的下标；-1 表示无活动区
         let raw = '';
+        let activeStart = -1;
+        let baseStableDom = document.createElement('div');
+        let activeDom = document.createElement('div');
+        const flushStream = () => {
+            if (!raw) return;
+            const b = mathBoundaryIndex(raw, raw.length);
+            const newActive = (b >= 0) ? b : raw.length;
+            // 先固化：上次活动区若这次已不是活动区起点之前的部分，代表公式已闭合，
+            // 把这段并入稳定区（仅渲染一次并 append）。
+            if (activeStart >= 0 && newActive > activeStart) {
+                flushStreamStaticPart(activeStart, newActive);
+            } else if (activeStart >= 0 && newActive < activeStart) {
+                // 内部回退：清掉活动区，重放整个新活动区
+                activeDom.innerHTML = '';
+            }
+            // 活动区渲染
+            if (newActive < raw.length) {
+                activeDom.innerHTML = renderMath(escHtml(raw.slice(newActive)));
+            } else if (activeDom.innerHTML) {
+                activeDom.innerHTML = '';
+            }
+            activeStart = newActive;
+        };
+        const flushStreamStaticPart = (from, to) => {
+            // 把 raw[from:to] 渲染并固化到稳定区
+            const htmlSafe = renderMath(escHtml(raw.slice(from, to)));
+            // 用临时 wrapper 转成节点再挪入稳定区
+            const wrap = document.createElement('div');
+            wrap.innerHTML = htmlSafe;
+            while (wrap.firstChild) baseStableDom.appendChild(wrap.firstChild);
+        };
+        // 提前建好稳定/活动容器，避免后续在循环里反复 append 到底层容器
+        streamingContent.appendChild(baseStableDom);
+        streamingContent.appendChild(activeDom);
         let reasoningText = '';
         let reasoningStarted = false;
         let contentStarted = false;
@@ -972,10 +1076,10 @@ async function sendMessage() {
             }
         };
         const renderThrottled = () => {
-            // 节流：高频 delta 不全量触发 KaTeX 重渲染，50ms 一次足够流畅
+            // F1：只增量渲染新增段，不再整段 innerHTML 重渲（原为 O(n²)，现 O(n)）
             const now = Date.now();
             if (now - lastRender > 50) {
-                streamingContent.innerHTML = renderMath(escHtml(raw));
+                flushStream();
                 lastRender = now;
                 scrollChat();
             }
@@ -1042,11 +1146,19 @@ async function sendMessage() {
             }
         }
 
-        // 收尾：停止思考心跳，强制渲染最终稿 + 时间戳
+        // 收尾：停止思考心跳，强制渲染最终稿 + 时间戳（最后把活动区的节点原样固化进稳定区，不重渲）
         stopThinkingTimer();
+        flushStream();
         if (streamingContent) {
-            streamingContent.innerHTML = renderMath(escHtml(raw));
-            streamingEl.querySelector('.msg-time').textContent = time();
+            // 活动区内容已由最后一次 flushStream 渲染好，直接并入稳定区顶层即可
+            if (activeDom.childNodes.length) {
+                while (activeDom.firstChild) baseStableDom.appendChild(activeDom.firstChild);
+            } else if (activeStart >= 0 && activeStart < raw.length) {
+                // 极端兜底：active 区为空但确有未渲染文本（如收尾前没碰过活跃公式），再渲染一次
+                flushStreamStaticPart(activeStart, raw.length);
+            }
+            activeDom.remove();
+            streamingContent.querySelector('.msg-time').textContent = time();
             scrollChat();
         }
         if (reasoningStarted && !sseError) {
@@ -1216,7 +1328,8 @@ async function toggleVoiceInput() {
         addSystemMessage('⚠️ 无法访问麦克风：请点浏览器地址栏的麦克风图标允许权限后重试');
         return;
     }
-    // 语音输入引擎按设置页独立配置解析（voice_provider：auto/local/qwen；auto = 有千问 Key 走云）
+    // 语音输入引擎按设置页独立配置解析（voice_provider：auto/local/qwen/zhipu/tencent/siliconflow；
+    // auto = 自动降级链 智谱→千问→腾讯→硅基流动→本地，按已配 key 的引擎优先）
     voiceEngine = await detectVoiceEngine();
 
     voiceChunks = [];
@@ -1252,21 +1365,33 @@ async function toggleVoiceInput() {
         setTimeout(() => voiceLiveTick(), 600);  // 尽快出第一版草稿
         addSystemMessage('🎤 录音中…本地 Whisper 实时草稿（免费离线），说完再点一次按钮定稿');
     } else {
-        addSystemMessage('🎤 录音中…千问云识别（约 ¥0.013/分钟），说完再点一次按钮定稿');
+        addSystemMessage('🎤 录音中…云端识别（以设置页选中引擎计费），说完再点一次按钮定稿');
     }
 }
 
-// 语音输入引擎解析：按设置页 asr.voice_provider（auto/local/qwen）；
-// auto = 有千问 Key 走云（qwen3-asr-flash，约 ¥0.013/分钟），否则本地 Whisper
+// 语音输入引擎解析：按设置页 asr.voice_provider（auto/local/qwen/zhipu/tencent/siliconflow）。
+// auto = 自动降级链：智谱 → 千问 → 腾讯 → 硅基流动（按已配置 key 的引擎优先），全无则本地
 async function detectVoiceEngine() {
     try {
         const resp = await apiFetch('/api/config/model');
         const cfg = await resp.json().catch(() => ({}));
         const asr = (cfg && cfg.asr) || {};
         const vp = String(asr.voice_provider || 'auto').toLowerCase();
-        if (vp === 'qwen') return 'qwen';
+        if (vp !== 'auto' && vp !== 'local' && vp !== 'qwen' && vp !== 'zhipu' && vp !== 'tencent' && vp !== 'siliconflow') {
+            return 'local';
+        }
         if (vp === 'local') return 'local';
-        return asr.has_key ? 'qwen' : 'local';
+        if (['qwen', 'zhipu', 'tencent', 'siliconflow'].includes(vp)) return vp;
+        // auto：按降级链顺序取第一个已配置 key 的云引擎
+        const eng = (asr.engines) || {};
+        for (const name of ['zhipu', 'qwen', 'tencent', 'siliconflow']) {
+            const e = eng[name] || {};
+            const ok = name === 'tencent'
+                ? !!(e.secret_id && e.secret_key)
+                : !!e.api_key;
+            if (ok) return name;
+        }
+        return 'local';
     } catch (e) { return 'local'; }
 }
 
@@ -1351,18 +1476,19 @@ function addUserMessage(text, img, quote) {
     if (img) html += `<div class="msg-content"><img src="${img}" class="chat-img" onload="scrollChat()"><br>${escHtml(text)}</div>`;
     else html += `<div class="msg-content">${escHtml(text)}</div>`;
     html += `<div class="msg-time">${time()}</div></div>`;
-    document.getElementById('chatMessages').innerHTML += html; scrollChat();
+    // F3：insertAdjacentHTML 仅追加新节点，避免整段 chatMessages 重解析（innerHTML +=）
+    document.getElementById('chatMessages').insertAdjacentHTML('beforeend', html); scrollChat();
 }
 function addAssistantMessage(text) {
     const safe = escHtml(text);
     const withMath = renderMath(safe);
-    document.getElementById('chatMessages').innerHTML +=
-        `<div class="message assistant"><div class="msg-content">${withMath}</div><div class="msg-time">${time()}</div></div>`;
+    document.getElementById('chatMessages').insertAdjacentHTML('beforeend',
+        `<div class="message assistant"><div class="msg-content">${withMath}</div><div class="msg-time">${time()}</div></div>`);
     scrollChat();
 }
 function addSystemMessage(text) {
-    document.getElementById('chatMessages').innerHTML +=
-        `<div class="message system"><div class="msg-content">${escHtml(text)}</div></div>`;
+    document.getElementById('chatMessages').insertAdjacentHTML('beforeend',
+        `<div class="message system"><div class="msg-content">${escHtml(text)}</div></div>`);
     scrollChat();
 }
 // 思维链块：点击标题行展开/折叠（流式与新历史消息共用）
@@ -1378,7 +1504,7 @@ function toggleReasoning(headerEl) {
 }
 let typingCount=0;
 function showTyping() { const id=++typingCount;
-    document.getElementById('chatMessages').innerHTML += `<div class="message assistant" id="typing-${id}"><div class="msg-content"><div class="typing-indicator"><span></span><span></span><span></span></div></div></div>`;
+    document.getElementById('chatMessages').insertAdjacentHTML('beforeend', `<div class="message assistant" id="typing-${id}"><div class="msg-content"><div class="typing-indicator"><span></span><span></span><span></span></div></div></div>`);
     scrollChat(); return id; }
 function removeTyping(id) { const e=document.getElementById(`typing-${id}`); if(e) e.remove(); }
 function clearChat() { document.getElementById('chatMessages').innerHTML=''; }
@@ -1480,7 +1606,9 @@ async function newConversation() {
         const d = await resp.json();
         state.conversationId = d.conversation_id;
         state.convModel = '';
+        state.convEffort = '';
         syncChatModelSelect();
+        syncChatEffortSelect();
         saveActiveConv();
         clearChat();
         document.querySelectorAll('.b-video-cb').forEach(cb => cb.checked=false);
@@ -1498,7 +1626,9 @@ async function selectConversation(convId) {
         if (!resp.ok) throw new Error('加载失败');
         const d = await resp.json();
         state.convModel = d.model || '';   // 会话级模型（历史会话恢复时下拉对齐）
+        state.convEffort = d.effort || ''; // 会话级思考强度（历史会话恢复时下拉对齐）
         syncChatModelSelect();
+        syncChatEffortSelect();
         // 一次性拼出全部 HTML 再写入 DOM，避免逐步 append 触发滚动锚定
         const box = document.getElementById('chatMessages');
         let html = '';
@@ -1634,29 +1764,45 @@ function clearQuote() {
 
 // ===== 会话级模型一键切换（当前 API Key 下可用模型列表，仅本会话生效） =====
 let chatModels = [];        // 可用模型列表缓存
-let chatModelLoaded = false;
 function chatModelSel() { return document.getElementById('chatModelSelect'); }
 
-async function loadChatModelList() {
+// F5：模型列表短 TTL 缓存（避免同一会话内反复请求外网 /models）
+const chatModelsTTL = 60 * 1000;
+let chatModelsCache = { t: 0, models: [], current: '' };
+async function loadChatModelList(force) {
     try {
+        // 设置保存 / 明确要求时 force 强刷；否则走 60s 缓存
+        const now = Date.now();
+        if (!force && now - chatModelsCache.t < chatModelsTTL) {
+            chatModels = chatModelsCache.models;
+            state.globalModel = chatModelsCache.current;
+            fillChatModelSelect();
+            syncChatModelSelect();
+            return;
+        }
         const resp = await apiFetch('/api/config/chat-models', { method: 'POST' });
         const d = await resp.json().catch(() => ({}));
         chatModels = d.models || [];
         state.globalModel = d.current || '';
-        const sel = chatModelSel();
-        if (!sel) return;
-        sel.innerHTML = '';
-        if (chatModels.length) {
-            chatModels.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; sel.appendChild(o); });
-        } else {
-            const o = document.createElement('option');
-            o.value = state.globalModel;
-            o.textContent = state.globalModel || '（无法获取模型列表）';
-            sel.appendChild(o);
-            o.disabled = !state.globalModel;
-        }
+        chatModelsCache = { t: now, models: chatModels, current: state.globalModel };
+        fillChatModelSelect();
         syncChatModelSelect();
     } catch (e) {}
+}
+
+function fillChatModelSelect() {
+    const sel = chatModelSel();
+    if (!sel) return;
+    sel.innerHTML = '';
+    if (chatModels.length) {
+        chatModels.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; sel.appendChild(o); });
+    } else {
+        const o = document.createElement('option');
+        o.value = state.globalModel;
+        o.textContent = state.globalModel || '（无法获取模型列表）';
+        sel.appendChild(o);
+        o.disabled = !state.globalModel;
+    }
 }
 
 // 把下拉值对齐到当前会话的模型（convModel 优先，其次全局）
@@ -1703,6 +1849,70 @@ async function onChatModelChange(sel) {
     } catch (e) {
         addSystemMessage(`⚠️ 模型切换失败：${e.message}`);
         syncChatModelSelect();
+    }
+}
+
+// ===== 思考强度（会话级，与模型选择逻辑一致）=====
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const EFFORT_LABELS = { low: '低·min', medium: '中·m', high: '高·h', xhigh: '非常高·xh', max: '极限·max' };
+const DEFAULT_EFFORT = 'high';   // 会话未设时用全局默认（与后端 DEFAULT_EFFORT 对应）
+function chatEffortSel() { return document.getElementById('chatEffortSelect'); }
+
+function initChatEffortSelect() {
+    const sel = chatEffortSel();
+    if (!sel) return;
+    sel.innerHTML = '';
+    EFFORT_LEVELS.forEach(lv => {
+        const o = document.createElement('option');
+        o.value = lv;
+        o.textContent = (EFFORT_LABELS[lv] || lv);
+        sel.appendChild(o);
+    });
+    syncChatEffortSelect();
+}
+
+// 把下拉值对齐到当前会话的思考强度（convEffort 优先，其次默认 high）
+function syncChatEffortSelect() {
+    const sel = chatEffortSel();
+    if (!sel) return;
+    const active = state.convEffort || DEFAULT_EFFORT;
+    const hit = [...sel.options].find(o => o.value === active);
+    if (hit) sel.value = hit.value;
+    else {
+        // 兜底：未知值追加一项，防止下拉显示空白
+        const o = document.createElement('option');
+        o.value = active; o.textContent = active;
+        sel.appendChild(o); sel.value = active;
+    }
+}
+
+async function onChatEffortChange(sel) {
+    const effort = (sel.value || '').trim();
+    if (!effort || effort === state.convEffort) return;
+    // 还没有会话时先自动建一个（当前科目/模式），保证强度绑定到会话
+    if (!state.conversationId) {
+        try {
+            const resp = await apiFetch(`/api/chat/conversations?subject=${state.subject}&mode=${state.mode}`, { method: 'POST' });
+            if (!resp.ok) throw new Error('创建会话失败');
+            const d = await resp.json();
+            state.conversationId = d.conversation_id;
+            saveActiveConv();
+            loadConversations();
+        } catch (e) {
+            addSystemMessage(`⚠️ ${e.message}`);
+            syncChatEffortSelect();
+            return;
+        }
+    }
+    try {
+        const resp = await apiFetch(`/api/chat/conversations/${state.conversationId}/effort?effort=${encodeURIComponent(effort)}`, { method: 'POST' });
+        if (!resp.ok) throw new Error('保存失败');
+        state.convEffort = effort;
+        addSystemMessage(`✅ 本会话已切换思考强度：${EFFORT_LABELS[effort] || effort}`);
+        loadConversations();
+    } catch (e) {
+        addSystemMessage(`⚠️ 思考强度切换失败：${e.message}`);
+        syncChatEffortSelect();
     }
 }
 
@@ -1782,11 +1992,12 @@ function showSettings() {
     const tokenEl = document.getElementById('setToken');
     if (tokenEl) tokenEl.value = getApiToken();
     // 清空 Key 输入框（留空 = 保留已有 Key），加载当前配置填充
-    ['setMainKey', 'setVisionKey', 'setAsrKey'].forEach(id => {
+    ['setMainKey', 'setVisionKey', 'setAsrKey', 'setAsrKeyZhipu', 'setAsrTencentSecretKey', 'setAsrKeySiliconflow'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
     });
     loadModelConfig();
+    loadTiers();
 }
 function closeSettings(e) {
     if (e && e.target !== e.currentTarget) return;
@@ -1805,6 +2016,7 @@ async function loadModelConfig() {
             const el = document.getElementById(id);
             if (el && !hasKey) el.placeholder = '尚未配置 Key';
         };
+        fill('setMainName', c.main && c.main.name);
         fill('setMainBaseUrl', c.main && c.main.base_url);
         fill('setMainModel', c.main && c.main.model);
         const mm = document.getElementById('setMainMultimodal');
@@ -1814,22 +2026,38 @@ async function loadModelConfig() {
         ph('setMainKey', c.main && c.main.has_key);
         if (c.main && !c.main.has_key) document.getElementById('setMainKey').placeholder = '尚未配置 Key';
 
+        fill('setVisionName', c.vision && c.vision.name);
         fill('setVisionBaseUrl', c.vision && c.vision.base_url);
         fill('setVisionModel', c.vision && c.vision.model);
         const ve = document.getElementById('setVisionEnabled');
         if (ve) ve.checked = !!(c.vision && c.vision.enabled);
         if (c.vision && !c.vision.has_key) document.getElementById('setVisionKey').placeholder = '尚未配置 Key';
 
+        fill('setAsrName', c.asr && c.asr.name);
         fill('setAsrBaseUrl', c.asr && c.asr.base_url);
         fill('setAsrModel', c.asr && c.asr.model);
         const ap = document.getElementById('setAsrProvider');
-        if (ap) ap.value = (c.asr && c.asr.provider) || 'local';
+        if (ap) ap.value = (c.asr && c.asr.provider) || 'auto';
         const asz = document.getElementById('setAsrSize');
         if (asz) asz.value = (c.asr && c.asr.size) || 'small';
         const asv = document.getElementById('setAsrVoiceProvider');
         if (asv) asv.value = (c.asr && c.asr.voice_provider) || 'auto';
         if (c.asr && !c.asr.has_key) document.getElementById('setAsrKey').placeholder = '尚未配置 Key';
+        // 各云引擎 Key 状态提示（留空未配置 = 不参与自动降级链）
+        const eng = (c.asr && c.asr.engines) || {};
+        const engHint = {
+            setAsrKeyZhipu: eng.zhipu,
+            setAsrTencentAppId: eng.tencent,
+            setAsrTencentSecretId: eng.tencent,
+            setAsrTencentSecretKey: eng.tencent,
+            setAsrKeySiliconflow: eng.siliconflow,
+        };
+        Object.keys(engHint).forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.placeholder = engHint[id] ? '已配置（留空 = 保持）' : '尚未配置（不参与自动）';
+        });
     } catch (e) {}
+
 }
 // 从 OpenAI 兼容端点拉取可用模型列表，填充对应 datalist（不落库，用表单当前值）
 async function fetchModels(section) {
@@ -1870,6 +2098,234 @@ async function fetchModels(section) {
     }
 }
 
+
+// ===== 提供商分组头：名字 + 配置摘要（加名字要能管理：名字输入实时更新头部） =====
+function refreshProvHead(section) {
+    const idMap = { main: ['setMainName', 'pgNameMain', 'pgSumMain'],
+                    vision: ['setVisionName', 'pgNameVision', 'pgSumVision'],
+                    asr: ['setAsrName', 'pgNameAsr', 'pgSumAsr'] };
+    const [nameId, nameElId, sumElId] = idMap[section] || [];
+    const nb = document.getElementById(nameElId);
+    const ns = document.getElementById(sumElId);
+    if (!nb || !ns) return;
+    const input = document.getElementById(nameId);
+    const name = (input && input.value.trim()) || '未命名';
+    nb.textContent = name;
+    // 摘要：地址 + 模型 + Key 状态（读已填充的输入框）
+    const baseId = section === 'main' ? 'setMainBaseUrl' : section === 'vision' ? 'setVisionBaseUrl' : 'setAsrBaseUrl';
+    const modelId = section === 'main' ? 'setMainModel' : section === 'vision' ? 'setVisionModel' : 'setAsrModel';
+    const keyId = section === 'main' ? 'setMainKey' : section === 'vision' ? 'setVisionKey' : 'setAsrKey';
+    const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    const parts = [g(baseId), g(modelId)];
+    const keyEl = document.getElementById(keyId);
+    // 有输入值，或留空但 placeholder 不是"尚未配置"（= 已存 Key）→ 视为有 Key
+    const hasKey = keyEl ? !!(keyEl.value || !((keyEl.placeholder || '').includes('尚未配置'))) : false;
+    ns.textContent = [parts.filter(Boolean).join(' ・ '), keyEl ? (hasKey ? 'Key ✔' : '无 Key') : ''].filter(Boolean).join(' ・ ') || '（未配置）';
+}
+// name 输入即改即存预览（保存走 saveSettings）
+['main', 'vision', 'asr'].forEach(s => {
+    const id = { main: 'setMainName', vision: 'setVisionName', asr: 'setAsrName' }[s];
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => refreshProvHead(s));
+});
+
+
+// HTML 属性安全转义（渲染进 attribute value 用）
+function escAttr(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ===== 分层提供商条目库（每层可多个提供商；模型列表获取即录、勾选启停） =====
+const TIER_ORDER = ['text', 'vision', 'asr'];
+let tiersState = { text: [], vision: [], asr: [] };
+
+async function loadTiers() {
+    try {
+        const resp = await apiFetch('/api/config/tiers');
+        const d = await resp.json().catch(() => ({}));
+        tiersState = (d.tiers && d.tiers.text != null) ? d.tiers : { text: [], vision: [], asr: [] };
+    } catch (e) { tiersState = { text: [], vision: [], asr: [] }; }
+    TIER_ORDER.forEach(renderTier);
+}
+
+function tierBoxId(tier) { return 'tierItems' + (tier === 'text' ? 'Text' : tier === 'vision' ? 'Vision' : 'Asr'); }
+
+function renderTier(tier) {
+    const box = document.getElementById(tierBoxId(tier));
+    if (!box) return;
+    const list = tiersState[tier] || [];
+    box.innerHTML = '';
+    if (!list.length) {
+        box.innerHTML = '<div style="font-size:13px;color:var(--color-text-muted);padding:4px 2px">暂无提供商，点「＋ 增加提供商」添加。</div>';
+    }
+    list.forEach((p, idx) => {
+        const card = document.createElement('div');
+        card.className = 'tier-card';
+        card.dataset.tier = tier;
+        card.dataset.idx = idx;
+        card.style.cssText = 'border:1px solid var(--color-border-light);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:#fff';
+        const enabled = p.enabled || {};
+        const models = (p.models || []).map(m => {
+            const on = enabled[m] !== false;
+            return '<label class="checkbox-row" style="font-size:12.5px;margin:2px 0"><input type="checkbox" class="tier-model" data-model="' + escAttr(m) + '" ' + (on ? 'checked' : '') + '> ' + escHtml(m) + '</label>';
+        }).join('');
+        card.innerHTML =
+            '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+              '<label class="checkbox-row" style="margin:0;font-size:12px" title="设为当前生效"><input type="radio" class="tier-act" name="tierActive' + tier + '" ' + (p.active ? 'checked' : '') + '> 当前</label>' +
+              '<input class="tier-name" style="flex:1;min-width:110px" value="' + escAttr(p.name || '') + '" placeholder="名字（未命名）">' +
+              '<button class="btn-sm tier-del" style="color:var(--color-danger)">✕</button>' +
+            '</div>' +
+            '<div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">' +
+              '<input class="tier-base" style="flex:2;min-width:170px" value="' + escAttr(p.base_url || '') + '" placeholder="API 地址">' +
+              '<input class="tier-key" type="password" style="flex:1;min-width:100px" placeholder="API Key（留空=保留）">' +
+            '</div>' +
+            '<div style="margin-top:6px">' +
+              '<div style="display:flex;gap:6px;align-items:center;margin-bottom:2px;flex-wrap:wrap">' +
+                '<span style="font-size:12px;color:var(--color-text-muted)">模型列表（勾选=启用，会话中选具体模型）</span>' +
+                '<button class="btn-sm tier-fetch">🔍 获取模型</button>' +
+                '<span style="font-size:12px;color:' + (p.has_key ? 'var(--color-success)' : 'var(--color-warning)') + '">' + (p.has_key ? 'Key ✔' : '无 Key') + '</span>' +
+              '</div>' +
+              (models || '<div style="font-size:12px;color:#aaa">（空）</div>') +
+              '<div style="display:flex;gap:6px;margin-top:4px">' +
+                '<input class="tier-addmodel" style="flex:1;min-width:120px" placeholder="手动加模型名">' +
+                '<button class="btn-sm tier-addbtn">＋</button>' +
+              '</div>' +
+            '</div>';
+        box.appendChild(card);
+    });
+    refreshTierHead(tier);
+}
+
+function refreshTierHead(tier) {
+    const idMap = { text: ['pgNameMain', 'pgSumMain'], vision: ['pgNameVision', 'pgSumVision'], asr: ['pgNameAsr', 'pgSumAsr'] };
+    const nb = document.getElementById(idMap[tier][0]);
+    const ns = document.getElementById(idMap[tier][1]);
+    if (!nb || !ns) return;
+    const list = tiersState[tier] || [];
+    const active = list.find(x => x.active) || list[0];
+    if (!active) return;
+    nb.textContent = active.name || '未命名';
+    const models = (active.models || []).filter(m => (active.enabled || {})[m] !== false);
+    ns.textContent = [active.base_url, active.has_key ? 'Key ✔' : '无 Key', models.length ? '模型 ' + models.length + ' 个' : ''].filter(Boolean).join(' ・ ');
+}
+
+// 事件委托（每个容器一个监听）
+TIER_ORDER.forEach(tier => {
+    const box = document.getElementById(tierBoxId(tier));
+    if (!box) return;
+    box.addEventListener('click', e => {
+        const card = e.target.closest('.tier-card');
+        if (!card) return;
+        const t = card.dataset.tier;
+        const i = +card.dataset.idx;
+        if (e.target.closest('.tier-del')) { removeTierProvider(t, i); }
+        else if (e.target.closest('.tier-fetch')) { fetchTierModels(t, i, e.target); }
+        else if (e.target.closest('.tier-addbtn')) {
+            const input = card.querySelector('.tier-addmodel');
+            const m = (input && input.value || '').trim();
+            if (!m) return;
+            const p = (tiersState[t] || [])[i];
+            if (!p) return;
+            p.models = p.models || [];
+            if (!p.models.includes(m)) { p.models.push(m); p.enabled = p.enabled || {}; p.enabled[m] = true; }
+            if (input) input.value = '';
+            renderTier(t);
+        }
+    });
+    box.addEventListener('input', e => {
+        const card = e.target.closest('.tier-card');
+        if (!card) return;
+        const t = card.dataset.tier;
+        const i = +card.dataset.idx;
+        const p = (tiersState[t] || [])[i];
+        if (!p) return;
+        if (e.target.classList.contains('tier-name')) { p.name = e.target.value; refreshTierHead(t); }
+        else if (e.target.classList.contains('tier-base')) { p.base_url = e.target.value; refreshTierHead(t); }
+        else if (e.target.classList.contains('tier-key')) { p.api_key = e.target.value; }
+    });
+    box.addEventListener('change', e => {
+        const card = e.target.closest('.tier-card');
+        if (!card) return;
+        const t = card.dataset.tier;
+        const i = +card.dataset.idx;
+        const p = (tiersState[t] || [])[i];
+        if (!p) return;
+        if (e.target.classList.contains('tier-model')) {
+            p.enabled = p.enabled || {};
+            p.enabled[e.target.dataset.model] = e.target.checked;
+        } else if (e.target.classList.contains('tier-act')) {
+            activateTier(t, i);
+        }
+    });
+});
+
+function addTierProvider(tier) {
+    if (!tiersState[tier]) tiersState[tier] = [];
+    tiersState[tier].push({ id: '', name: '', base_url: '', api_key: '', models: [], enabled: {}, active: false });
+    renderTier(tier);
+}
+function removeTierProvider(tier, idx) {
+    const arr = tiersState[tier] || [];
+    if (arr.length <= 1) { alert('每层至少保留一个提供商'); return; }
+    arr.splice(idx, 1);
+    renderTier(tier);
+}
+async function fetchTierModels(tier, idx, btn) {
+    const p = (tiersState[tier] || [])[idx];
+    if (!p) return;
+    const base = (p.base_url || '').trim();
+    if (!base) { alert('先填 API 地址'); return; }
+    if (btn) btn.textContent = '⏳...';
+    try {
+        const resp = await apiFetch('/api/config/list-models', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base_url: base, api_key: (p.api_key || '').trim() }),
+        });
+        const d = await resp.json().catch(() => ({}));
+        const models = d.models || [];
+        p.models = p.models || [];
+        p.enabled = p.enabled || {};
+        let added = 0;
+        models.forEach(m => { if (!p.models.includes(m)) { p.models.push(m); p.enabled[m] = true; added++; } });
+        if (btn) btn.textContent = '🔍 获取模型';
+        alert(added ? '✅ 已录入 ' + models.length + ' 个模型（新增 ' + added + '）' : (d.error ? '⚠️ ' + d.error : '无新模型'));
+        renderTier(tier);
+    } catch (e) {
+        if (btn) btn.textContent = '🔍 获取模型';
+        alert('获取失败: ' + e.message);
+    }
+}
+async function activateTier(tier, idx) {
+    const p = (tiersState[tier] || [])[idx];
+    if (!p) return;
+    if (p.id) {
+        try {
+            const resp = await apiFetch('/api/config/tiers/activate', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tier: tier, provider_id: p.id }),
+            });
+            const d = await resp.json().catch(() => ({}));
+            if (d.message) addSystemMessage('✅ ' + d.message);
+        } catch (e) { addSystemMessage('⚠️ 激活失败: ' + e.message); }
+    }
+    (tiersState[tier] || []).forEach((x, i) => { x.active = (i === idx); });
+    renderTier(tier);
+}
+async function saveTiersAll() {
+    for (const tier of TIER_ORDER) {
+        try {
+            const providers = (tiersState[tier] || []).map(p => ({
+                id: p.id || '', name: (p.name || '').trim(), base_url: (p.base_url || '').trim(),
+                api_key: (p.api_key || '').trim(), models: p.models || [], enabled: p.enabled || {}, active: !!p.active,
+            }));
+            await apiFetch('/api/config/tiers', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tier: tier, providers: providers }),
+            });
+        } catch (e) {}
+    }
+}
+
 async function saveSettings() {
     // 访问令牌（本地）
     const token = document.getElementById('setToken').value.trim();
@@ -1883,29 +2339,44 @@ async function saveSettings() {
         else localStorage.removeItem('kaoyan_compact_ctx');
     } catch (e) {}
 
-    // 模型配置（服务器，留空 Key = 保留已有）
+    // 模型配置（服务器，留空 Key = 保留已有）；地址/key/模型取当前生效提供商条目
+    const actOf = t => (tiersState[t] || []).find(x => x.active) || (tiersState[t] || [])[0] || {};
+    const mA = actOf('text'), vA = actOf('vision'), aA = actOf('asr');
+    const mdl0 = p => ((p.models || [])[0] || '').trim();
     const payload = {
         main: {
-            base_url: document.getElementById('setMainBaseUrl').value.trim(),
-            api_key: document.getElementById('setMainKey').value.trim(),
-            model: document.getElementById('setMainModel').value.trim(),
-            multimodal: document.getElementById('setMainMultimodal').checked,
+            base_url: (mA.base_url || '').trim(),
+            api_key: (mA.api_key || '').trim(),
+            model: mdl0(mA),
+            multimodal: document.getElementById('setMainMultimodal') ? document.getElementById('setMainMultimodal').checked : false,
         },
         vision: {
-            enabled: document.getElementById('setVisionEnabled').checked,
-            base_url: document.getElementById('setVisionBaseUrl').value.trim(),
-            api_key: document.getElementById('setVisionKey').value.trim(),
-            model: document.getElementById('setVisionModel').value.trim(),
+            enabled: document.getElementById('setVisionEnabled') ? document.getElementById('setVisionEnabled').checked : true,
+            base_url: (vA.base_url || '').trim(),
+            api_key: (vA.api_key || '').trim(),
+            model: mdl0(vA),
         },
         asr: {
-            base_url: document.getElementById('setAsrBaseUrl').value.trim(),
-            api_key: document.getElementById('setAsrKey').value.trim(),
-            model: document.getElementById('setAsrModel').value.trim(),
-            provider: document.getElementById('setAsrProvider').value,
-            size: document.getElementById('setAsrSize').value,
-            voice_provider: document.getElementById('setAsrVoiceProvider').value,
+            base_url: (aA.base_url || '').trim(),
+            api_key: (aA.api_key || '').trim(),
+            model: mdl0(aA),
+            provider: document.getElementById('setAsrProvider') ? document.getElementById('setAsrProvider').value : 'auto',
+            size: document.getElementById('setAsrSize') ? document.getElementById('setAsrSize').value : 'small',
+            voice_provider: document.getElementById('setAsrVoiceProvider') ? document.getElementById('setAsrVoiceProvider').value : 'auto',
+            engines: {
+                qwen: { api_key: document.getElementById('setAsrKey') ? document.getElementById('setAsrKey').value.trim() : '' },
+                zhipu: { api_key: document.getElementById('setAsrKeyZhipu') ? document.getElementById('setAsrKeyZhipu').value.trim() : '' },
+                tencent: {
+                    app_id: document.getElementById('setAsrTencentAppId') ? document.getElementById('setAsrTencentAppId').value.trim() : '',
+                    secret_id: document.getElementById('setAsrTencentSecretId') ? document.getElementById('setAsrTencentSecretId').value.trim() : '',
+                    secret_key: document.getElementById('setAsrTencentSecretKey') ? document.getElementById('setAsrTencentSecretKey').value.trim() : '',
+                },
+                siliconflow: { api_key: document.getElementById('setAsrKeySiliconflow') ? document.getElementById('setAsrKeySiliconflow').value.trim() : '' },
+            },
         },
     };
+    // 分层提供商条目一起保存
+    await saveTiersAll();
     try {
         const resp = await apiFetch('/api/config/model', {
             method: 'POST',
@@ -1917,9 +2388,8 @@ async function saveSettings() {
             throw new Error(d.detail || resp.status);
         }
         alert('✅ 模型配置已保存，立即生效');
-        // 全局模型可能变了：重新拉对话框模型下拉列表
-        chatModelLoaded = false;
-        loadChatModelList();
+        // 全局模型可能变了：强制刷新对话框模型下拉列表（绕过 60s 缓存）
+        loadChatModelList(true);
     } catch (err) {
         alert(`❌ 保存失败：${err.message}`);
     }
@@ -1960,6 +2430,43 @@ function renderMath(text) {
     // 2) $...$ 行内公式（不跨行、非贪婪，且要求 $ 前不是另一公式的 $）
     text = text.replace(/(^|[^\$])\$([^\$\n]+?)\$(?!\$)/g, (m, prefix, formula) => prefix + render(formula, false));
     return text;
+}
+
+/* ===== 流式增量渲染辅助（F1 性能优化）=====
+ * 打字机流式输出时不再对整段回答反复全局重渲（innerHTML = renderMath(full)，O(n²)），
+ * 而是只对"新增文本"增量渲染并 append。难点是正则公式 $...$ / $$...$$ 可能被流式边界
+ * 截断——`$` 在上一批末尾、闭包在下一批开头。因此渲染前用状态机定位"边界是否处于
+ * 未闭合公式内"，若是则把渲染起点回退到该公式的起始 $，仅重做这一小段。
+ */
+function mathBoundaryIndex(text, upto) {
+    // 从头部扫描 text，返回 text[0:upto] 结尾是否处于公式内；若是则返回该公式起始下标，否则 -1。
+    // 公式语法：$$...$$（块级，可跨行）| $...$(非$)(?!$)（行内，不跨行）。
+    if (upto <= 0) return -1;
+    let inBlock = false, inInline = false, lastStart = -1;
+    const s = text;
+    let i = 0;
+    while (i < upto && i < s.length) {
+        const c = s[i];
+        if (c === '$') {
+            const isDouble = s[i + 1] === '$';
+            if (isDouble) {
+                if (!inBlock && !inInline) { inBlock = true; lastStart = i; i += 2; continue; }
+                if (inBlock) { inBlock = false; lastStart = -1; i += 2; continue; }
+                i += 2; continue; // inInline 时遇到 $$，视为普通字符，忽略边界情况
+            } else {
+                // 单个 $：须判断不是紧邻 $ 的成对片段（$$ 已在上面的分支吃掉）
+                const prevIsDollar = i > 0 && s[i - 1] === '$';
+                if (!prevIsDollar) {
+                    if (!inInline && !inBlock) { inInline = true; lastStart = i; }
+                    else if (inInline) { inInline = false; lastStart = -1; }
+                }
+            }
+        }
+        // 行内公式不跨行：遇到换行且仍在行内，视为出错强行闭合（与 renderMath 的 $[^\$\n] 语义一致）
+        if (inInline && c === '\n') { inInline = false; lastStart = -1; }
+        i++;
+    }
+    return (inBlock || inInline) ? lastStart : -1;
 }
 
 // ===== 播放进度记忆 =====
@@ -2023,5 +2530,309 @@ function getSelectedBVideos() {
 }
 
 function escHtml(t) { const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+
+// ===== 移动端抽屉（≤900px）=====
+function openVideoDrawer() {
+    document.querySelector('.video-sidebar').classList.add('drawer-open');
+    document.getElementById('drawerMask').classList.add('show');
+}
+function openChatDrawer() {
+    document.querySelector('.chat-panel').classList.add('drawer-open');
+    document.getElementById('drawerMask').classList.add('show');
+}
+function closeVideoDrawer() {
+    document.querySelector('.video-sidebar').classList.remove('drawer-open');
+    syncMask();
+}
+function closeChatDrawer() {
+    document.querySelector('.chat-panel').classList.remove('drawer-open');
+    syncMask();
+}
+function closeDrawers() {
+    document.querySelectorAll('.drawer-open').forEach(el => el.classList.remove('drawer-open'));
+    syncMask();
+}
+function syncMask() {
+    const open = document.querySelectorAll('.drawer-open').length > 0;
+    document.getElementById('drawerMask').classList.toggle('show', open);
+}
+// 桌面 >900px 时 drawer-open 无副作用；窄屏切换科目时顺手收起（可选体验）
+if (window.matchMedia('(max-width: 900px)').matches && window.location.hash) {
+    // 保留占位：不主动触发，避免干扰初始加载
+}
+
+// ===== 自绘播放器控制条：播放/进度/时间 + 点击显隐（不依赖系统播放器，全浏览器统一） =====
+(function () {
+    const wrapper = document.getElementById('videoWrapper');
+    const video = document.getElementById('videoPlayer');
+    const bar = document.getElementById('vcBar');
+    const playBtn = document.getElementById('vcPlayBtn');
+    const prog = document.getElementById('vcProgress');
+    const timeEl = document.getElementById('vcTime');
+    if (!wrapper || !video || !bar) return;
+
+    function fmt(sec) {
+        if (!isFinite(sec) || sec < 0) sec = 0;
+        const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+        return m + ':' + String(s).padStart(2, '0');
+    }
+    function setPlayIcon() { if (playBtn) playBtn.textContent = video.paused ? '▶' : '⏸'; }
+    function syncUI() {
+        const d = video.duration || 0;
+        if (d > 0 && prog) prog.value = Math.round((video.currentTime / d) * 1000);
+        if (timeEl) timeEl.textContent = fmt(video.currentTime) + ' / ' + fmt(d);
+        setPlayIcon();
+    }
+    function showControls() {
+        document.querySelectorAll('.video-controls-overlay').forEach(el => {
+            el.classList.remove('hide');
+            el.classList.add('ctrl-visible');
+        });
+        const barEl = document.getElementById('vcBar');
+        if (barEl) barEl.classList.remove('hide');
+        scheduleHide();
+    }
+    function hideControls() {
+        document.querySelectorAll('.video-controls-overlay').forEach(el => {
+            el.classList.add('hide');
+            el.classList.remove('ctrl-visible');
+        });
+        const barEl = document.getElementById('vcBar');
+        if (barEl) barEl.classList.add('hide');
+    }
+    let hideTimer = null;
+    function scheduleHide() {
+        clearTimeout(hideTimer);
+        // 播放中 3 秒无操作自动隐藏；暂停时常驻（用户要在暂停状态操作按钮）
+        if (!video.paused) hideTimer = setTimeout(hideControls, 3000);
+    }
+
+    // 拖动进度条时重置自动隐藏计时（拖动期间不隐藏）
+    const progressEl = document.getElementById('vcProgress');
+    if (progressEl) {
+        ['input', 'pointerdown', 'touchstart'].forEach(ev =>
+            progressEl.addEventListener(ev, () => { showControls(); }));
+    }
+
+    // 单击画面：播放/暂停 + 唤起控制条（点按钮/控制条区域除外，未选视频忽略）——双击全屏已取消
+    wrapper.addEventListener('click', e => {
+        if (e.target.closest('.speed-btn, .speed-sep, .vc-bar, .vc-tap-to-play')) return;
+        if (!(video.getAttribute('src') || video.currentSrc)) return;
+        if (video.paused) { video.play().catch(() => {}); } else { video.pause(); }
+        showControls();
+    });
+
+    // 视频事件同步 UI
+    video.addEventListener('play', () => { setPlayIcon(); showControls(); });
+    video.addEventListener('pause', () => { setPlayIcon(); showControls(); });
+    video.addEventListener('timeupdate', syncUI);
+    video.addEventListener('durationchange', syncUI);
+    video.addEventListener('ended', () => { if (playBtn) playBtn.textContent = '↻'; });
+    video.addEventListener('loadedmetadata', () => { bar.classList.remove('hide'); syncUI(); });
+    wrapper.addEventListener('mousemove', showControls);
+    wrapper.addEventListener('mouseleave', scheduleHide);
+
+    // 全局 API（供 inline onclick 调用）
+    window.togglePlay = function () { if (video.paused) video.play(); else video.pause(); };
+    window.showControls = showControls;
+    window.hideControls = hideControls;
+    window.seekFromSlider = function (v) {
+        const d = video.duration;
+        if (d > 0) video.currentTime = (v / 1000) * d;
+    };
+
+    // 键盘：空格播放/暂停，← → 快退/快进 5 秒，F 全屏
+    document.addEventListener('keydown', e => {
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+        if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+        else if (e.key === 'ArrowLeft' && !video.paused) { video.currentTime = Math.max(0, video.currentTime - 5); }
+        else if (e.key === 'ArrowRight' && !video.paused) { video.currentTime = Math.min(video.duration || 0, video.currentTime + 5); }
+        else if (e.key === 'f' || e.key === 'F') { toggleFullscreen(); }
+    });
+})();
+
+// ===== 画面手势：长按=临时 2×倍速（300ms 未移动触发）；按住滑动=快进/回退 =====
+(function () {
+    const wrapper = document.getElementById('videoWrapper');
+    const video = document.getElementById('videoPlayer');
+    const tip = document.getElementById('vcSeekTip');
+    if (!wrapper || !video || !tip) return;
+
+    let startX = null, startY = null, startT = 0, dragging = false, lastSeek = 0;
+    let holdTimer = null, boostActive = false, boostBase = 1;
+    const PX_PER_SEC = 3.2;   // 每 3.2px ≈ 1 秒
+    const TAP_SLOP = 12;      // <12px 视为点击
+    const HOLD_MS = 300;      // 长按阈值：300ms 未移动 → 进入临时 2× 倍速
+
+    function fmt(s) {
+        s = Math.max(0, Math.floor(s));
+        return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    }
+    function cancelHold() {
+        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    }
+    function endBoost() {
+        if (boostActive) {
+            boostActive = false;
+            video.playbackRate = boostBase || 1;
+        }
+    }
+
+    wrapper.addEventListener('touchstart', e => {
+        if (e.target.closest('.speed-btn, .speed-sep, .vc-bar')) return;
+        const t = e.touches[0];
+        startX = t.clientX; startY = t.clientY;
+        startT = video.currentTime;
+        dragging = false;
+        endBoost();
+        cancelHold();
+        // 长按计时：未移动 300ms → 临时 2× 当前倍速（最高 5x）
+        holdTimer = setTimeout(() => {
+            holdTimer = null;
+            if (dragging) return;
+            boostBase = video.playbackRate || 1;
+            video.playbackRate = Math.min(boostBase * 2, 5);
+            boostActive = true;
+            if (tip) { tip.textContent = '⏩×' + video.playbackRate + ' (临时)'; tip.style.display = 'block'; }
+        }, HOLD_MS);
+    }, { passive: true });
+
+    wrapper.addEventListener('touchmove', e => {
+        if (startX === null) return;
+        const t = e.touches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        // 方向轴按模式隔离：未旋转/横屏视口 = 左右(x)；旋转横屏（竖屏视口+rotate）视觉左右 = 屏幕Y
+        const rotated = document.documentElement.classList.contains('rotate-landscape') &&
+                        window.matchMedia('(orientation: portrait)').matches;
+        const eff = rotated ? dy : dx;
+        if (!dragging) {
+            if (Math.abs(eff) < TAP_SLOP) return;
+            dragging = true;
+            cancelHold();
+            endBoost();          // 长按后改为滑动 → 取消 boost 转 seek
+            e.preventDefault();
+        }
+        const now = Date.now();
+        if (now - lastSeek < 80) return;
+        lastSeek = now;
+        const dur = video.duration;
+        if (!(dur > 0)) return;
+        const target = Math.max(0, Math.min(dur, startT + eff / PX_PER_SEC));
+        try { video.currentTime = target; } catch (_) {}
+        const delta = target - startT;
+        tip.textContent = (delta >= 0 ? '⏩ +' : '⏪ ') + fmt(Math.abs(delta)) + ' ｜ ' + fmt(target) + ' / ' + fmt(dur);
+        tip.style.display = 'block';
+    }, { passive: false });
+
+    function endGesture() {
+        if (startX !== null) tip.style.display = 'none';
+        if (boostActive) {
+            endBoost();
+            cancelHold();
+            wrapper._suppressClick = true;   // 长按后吞掉 click（不触播放/暂停）
+        } else if (dragging) {
+            wrapper._suppressClick = true;   // 拖完吞掉 click
+        }
+        cancelHold();
+        startX = null; startY = null; dragging = false;
+    }
+    wrapper.addEventListener('touchend', endGesture);
+    wrapper.addEventListener('touchcancel', endGesture);
+
+    // 手势结束后，捕获阶段拦截同一次触摸产生的 click
+    wrapper.addEventListener('click', e => {
+        if (wrapper._suppressClick) {
+            e.stopPropagation();
+            wrapper._suppressClick = false;
+        }
+    }, true);
+})();
+
+// ===== 整站横屏旋转（旋转 + 全屏沉浸，方向感知） =====
+// 进：requestFullscreen 成功后加 rotate-landscape（竖屏视口转 90° / 横屏视口不转，避免 180°）
+//     浏览器不支持全屏时降级为纯旋转（保持可用）
+// 退：再次点击、系统退出全屏（Esc/手势）时同步移除旋转态
+function toggleRotateLandscape() {
+    const root = document.documentElement;
+    // 旋转与全屏互斥：已全屏时先退出（避免两套状态叠加打架）
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    }
+    root.classList.toggle('rotate-landscape');
+}
+// 系统退出全屏（Esc / 下滑手势）时同步取消旋转态，避免残留
+if (document.documentElement.addEventListener) {
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement) {
+            document.documentElement.classList.remove('rotate-landscape');
+        } else if (window.showControls) {
+            window.showControls();
+        }
+    });
+    document.addEventListener('webkitfullscreenchange', () => {
+        if (!document.webkitFullscreenElement) {
+            document.documentElement.classList.remove('rotate-landscape');
+        } else if (window.showControls) {
+            window.showControls();
+        }
+    });
+}
 function formatSize(b) { if(!b) return ''; const u=['B','KB','MB','GB']; let s=b,i=0; while(s>=1024&&i<u.length-1){s/=1024;i++} return `${s.toFixed(1)}${u[i]}`; }
 function time() { const n=new Date(); return `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`; }
+
+// ===== 播放器补充层：缓冲指示 / 音量 / 错误重试 / 自动播放失败兜底 =====
+(function () {
+    const video = document.getElementById('videoPlayer');
+    const spinner = document.getElementById('vcSpinner');
+    const tap = document.getElementById('vcTapToPlay');
+    const err = document.getElementById('vcError');
+    const vol = document.getElementById('vcVolume');
+    const muteBtn = document.getElementById('vcMuteBtn');
+    if (!video) return;
+
+    // 1. 缓冲指示（网络卡顿/dragging seek 时转圈）
+    if (spinner) {
+        video.addEventListener('waiting', () => { spinner.style.display = 'flex'; });
+        video.addEventListener('playing', () => { spinner.style.display = 'none'; });
+        video.addEventListener('seeked', () => { spinner.style.display = 'none'; });
+        video.addEventListener('canplay', () => { spinner.style.display = 'none'; });
+    }
+
+    // 2. 音量（静音 + 滑块）
+    function syncVol() {
+        if (vol) vol.value = Math.round((video.muted ? 0 : (video.volume || 1)) * 100);
+        if (muteBtn) muteBtn.textContent = (video.muted || video.volume === 0) ? '🔇' : '🔊';
+    }
+    window.toggleMute = function () { video.muted = !video.muted; syncVol(); };
+    window.setVolume = function (v) { video.volume = Math.max(0, Math.min(1, v / 100)); video.muted = false; syncVol(); };
+    video.addEventListener('volumechange', syncVol);
+
+    // 3. 自动播放被浏览器拦截时的"点击播放"兜底层
+    function showTap() { if (tap) tap.style.display = 'flex'; }
+    window.__vcOnPlayRejected = showTap;
+    if (tap) {
+        tap.addEventListener('click', e => {
+            e.stopPropagation();
+            video.play().then(() => { tap.style.display = 'none'; }).catch(() => {});
+        });
+    }
+
+    // 4. 错误提示 + 重试（playVideo 的 onerror 里会调用 __vcShowError）
+    window.__vcShowError = function () {
+        if (err) err.style.display = 'flex';
+        if (spinner) spinner.style.display = 'none';
+    };
+    window.retryVideo = function () {
+        if (err) err.style.display = 'none';
+        video.load();
+        const p = video.play();
+        if (p && p.catch) p.catch(() => showTap());
+    };
+    video.addEventListener('error', () => {
+        if (!(video.currentSrc || video.getAttribute('src'))) return;
+        if (spinner) spinner.style.display = 'none';
+    });
+})();
