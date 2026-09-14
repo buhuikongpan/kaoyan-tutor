@@ -5,7 +5,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>考研学习平台</title>
-    <link rel="stylesheet" href="css/style.css?v=39">
+    <link rel="stylesheet" href="css/style.css?v=42">
 </head>
 <body>
     <div class="app">
@@ -25,6 +25,7 @@
                     <button class="subject-tab active" data-subject="math" onclick="switchSubject('math')">📐 数学</button>
                     <button class="subject-tab" data-subject="english" onclick="switchSubject('english')">📖 英语</button>
                     <button class="subject-tab" data-subject="politics" onclick="switchSubject('politics')">🗳️ 政治</button>
+                    <button class="subject-tab" data-subject="zhuanye" onclick="switchSubject('zhuanye')">🎓 专业课</button>
                 </nav>
             </div>
             <button class="btn-settings" onclick="toggleRotateLandscape()" aria-label="整站横屏旋转" title="整站横屏旋转">🔄</button>
@@ -38,12 +39,17 @@
                 <div class="sidebar-header">
                     <span class="sidebar-title">📁 视频目录</span>
                     <div class="sidebar-actions">
+                        <button class="btn-sm btn-del-batch" onclick="onDelBatchClick()" title="批量删除（首次点击进入选择模式，再次点击确认删除）" aria-label="批量删除视频">🗑️<span class="del-batch-count" id="delBatchCount" style="display:none"></span></button>
                         <button class="btn-sm" onclick="batchSummaries()" title="一键补生成课程总结（字幕已完成但无总结的视频）" aria-label="批量生成课程总结">📑</button>
                         <button class="btn-sm" onclick="rescanVideos()" title="重新扫描本地目录（找回手动放入 storage/videos 的视频）" aria-label="重新扫描本地目录">🔎</button>
                         <button class="btn-sm" onclick="showNewFolderDialog()" title="新建文件夹" aria-label="新建文件夹">📂</button>
                         <button class="btn-sm" onclick="document.getElementById('folderUploadInput').click()" title="扫描文件夹上传" aria-label="扫描文件夹上传">📤</button>
                         <button class="btn-sm btn-primary-sm" onclick="document.getElementById('uploadInput').click()" title="上传视频" aria-label="上传视频">＋</button>
                     </div>
+                </div>
+                <div class="upload-folder-row">
+                    <label for="uploadFolderSelect">上传到：</label>
+                    <select id="uploadFolderSelect"><option value="0">（未分类）</option></select>
                 </div>
                 <div class="sidebar-search-row">
                     <input type="text" id="videoSearch" class="video-search" placeholder="🔍 搜索视频…（标题/文件名）" oninput="onVideoSearch(this.value)" aria-label="搜索视频">
@@ -66,6 +72,17 @@
                     <div class="vc-spinner" id="vcSpinner" style="display:none" aria-label="缓冲中"><div class="spinner-ring"></div><span>缓冲中…</span></div>
                     <div class="vc-tap-to-play" id="vcTapToPlay" style="display:none"><span class="tap-icon">▶</span><span>点击播放</span></div>
                     <div class="vc-error" id="vcError" style="display:none"><span>⚠️ 视频加载失败</span><button class="vc-retry" onclick="retryVideo()">重试</button></div>
+                    <div class="video-end-screen" id="videoEndScreen" style="display:none">
+                        <div class="end-card">
+                            <div class="end-icon">🎬</div>
+                            <div class="end-title" id="endTitle">课程已结束</div>
+                            <div class="end-actions">
+                                <button class="end-btn" onclick="onEndReplay()" title="重新播放">↻ 重播</button>
+                                <button class="end-btn" onclick="onEndPrev()" id="endPrevBtn" title="上一个视频">◀ 上一课</button>
+                                <button class="end-btn primary" onclick="onEndNext()" id="endNextBtn" title="下一个视频">下一课 ▶</button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="video-subtitle-overlay" id="videoSubtitleOverlay"></div>
                     <div class="video-controls-overlay" id="speedControls">
                         <button class="speed-btn" onclick="setSpeed(0.5)">0.5x</button>
@@ -139,6 +156,7 @@
                             </div>
                         </div>
                         <div class="chat-input-area">
+                            <button id="scrollToBottomBtn" class="scroll-bottom-btn" onclick="jumpChatToBottom()" title="回到底部" aria-label="回到底部">↓</button>
                             <div class="model-picker-row" title="切换当前会话使用的模型（仅本会话生效）">
                                 <label for="chatModelSelect">🤖 模型</label>
                                 <select id="chatModelSelect" onchange="onChatModelChange(this)"></select>
@@ -161,10 +179,7 @@
                                 <textarea id="chatInput" rows="2" placeholder="输入问题，回车发送..." onkeydown="onInputKeydown(event)" onpaste="onPaste(event)"></textarea>
                                 <button class="btn-send" id="btnSend" onclick="sendMessage()">发送</button>
                             </div>
-                            <div class="image-preview" id="imagePreview" style="display:none">
-                                <img id="previewImg" src="" alt="预览">
-                                <button class="btn-remove-img" onclick="removeImage()" aria-label="移除图片">✕</button>
-                            </div>
+                            <div class="image-preview" id="imagePreview" style="display:none"></div>
                         </div>
                     </div>
                 </div>
@@ -201,7 +216,6 @@
                         <div style="font-size:12px;color:var(--color-text-muted);margin-bottom:4px">▼ 提供商列表（可多个；勾选「当前」生效；模型获取即录、勾选启停）</div>
                         <div id="tierItemsText"></div>
                         <button class="btn-sm btn-primary-sm" onclick="addTierProvider('text')" type="button">＋ 增加提供商</button>
-                        <label class="checkbox-row"><input type="checkbox" id="setMainMultimodal"> 主模型支持多模态（可直接发图片，无需视觉辅助）</label>
                         <label class="checkbox-row"><input type="checkbox" id="setCompactA"> ⚡ 模式A 精简上下文：只发「课程总结 + 播放位置前后 ±10 分钟字幕」（回答更快更省，默认关闭）</label>
                     </div>
                 </details>
@@ -310,7 +324,7 @@
                 <h2>📄 课程总结</h2>
                 <button class="btn-close" onclick="closeSummary()" aria-label="关闭">✕</button>
             </div>
-            <div id="summaryBody" style="max-height:65vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.8;padding:14px 16px;background:#f7f8fa;border-radius:6px;margin:6px 0"></div>
+            <div id="summaryBody" style="max-height:65vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.8;padding:16px 18px;background:var(--color-surface-subtle);border:1px solid var(--color-border-light);border-radius:var(--radius-md);margin:10px 0"></div>
             <div style="text-align:right">
                 <button class="btn-primary" id="summaryDownload">⬇️ 下载 .md</button>
             </div>

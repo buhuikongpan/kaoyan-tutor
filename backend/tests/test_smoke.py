@@ -46,8 +46,11 @@ class SmokeTest(unittest.TestCase):
         self.assertIn("uncategorized", r.json())
 
     def test_send_stream_requires_query(self):
+        # query 现在是可选参数（ask 工具的回答轮只带 ask_answers），
+        # 因此空消息由业务校验拦下，返回 400 而不是 FastAPI 的 422
         r = client.post("/api/chat/send-stream")
-        self.assertEqual(r.status_code, 422)  # 缺 query 表单参数
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("不能为空", r.json()["detail"])
 
 
 if __name__ == "__main__":

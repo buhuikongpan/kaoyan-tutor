@@ -10,6 +10,26 @@ storage/
 qc
 query
 
+# ===== 本地私有（真实密钥留底，绝不进仓库）=====
+.local_backup/
+
+# ===== 本机 / 云端运维脚本（含服务器地址与凭据，不对外发布；本地照常可用）=====
+scripts/push_to_cloud.py
+scripts/pull_from_cloud.py
+scripts/sync_data.py
+scripts/sync_code.py
+scripts/upload_subtitles.py
+scripts/compress_upload.py
+scripts/gen_key_docx.py
+scripts/_test_apply.py
+scripts/fix_db_paths.py
+一键同步代码.bat
+一键同步数据.bat
+一键拉取云端.bat
+一键推送云端.bat
+上传字幕到云端.bat
+视频库压缩上传脚本.bat
+
 # ===== Python =====
 __pycache__/
 *.pyc

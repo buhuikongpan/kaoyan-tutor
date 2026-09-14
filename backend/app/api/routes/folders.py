@@ -12,8 +12,8 @@ router = APIRouter(prefix="/api/folders", tags=["文件夹"])
 @router.get("/tree")
 def get_folder_tree(subject: str = Query(""), db: Session = Depends(get_db)):
     """获取文件夹树 + 各文件夹下的视频"""
-    folders = db.query(Folder).filter(Folder.subject == subject).order_by(Folder.sort_order).all()
-    videos = db.query(Video).filter(Video.subject == subject).order_by(Video.sort_order).all()
+    folders = db.query(Folder).filter(Folder.subject == subject).order_by(Folder.sort_order.asc(), Folder.id.asc()).all()
+    videos = db.query(Video).filter(Video.subject == subject).order_by(Video.sort_order.asc(), Video.filename.asc()).all()
 
     # 构建文件夹树
     folder_map = {}

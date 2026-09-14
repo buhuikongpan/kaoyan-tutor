@@ -5,8 +5,8 @@ title 考研学习平台 - 一键启动
 REM ===== 定位项目根目录（兼容脚本放在 scripts\ 内或桌面/项目旁）=====
 set "PROJECT="
 if exist "%~dp0..\.env.example" set "PROJECT=%~dp0.."
-if not defined PROJECT if exist "%~dp0DIFY考研学习平台\本地文件\.env.example" set "PROJECT=%~dp0DIFY考研学习平台\本地文件"
-if not defined PROJECT if exist "%~dp0..\DIFY考研学习平台\本地文件\.env.example" set "PROJECT=%~dp0..\DIFY考研学习平台\本地文件"
+if not defined PROJECT if exist "%~dp0考研学习平台\本地文件\.env.example" set "PROJECT=%~dp0考研学习平台\本地文件"
+if not defined PROJECT if exist "%~dp0..\考研学习平台\本地文件\.env.example" set "PROJECT=%~dp0..\考研学习平台\本地文件"
 if not defined PROJECT (
     echo [X] 无法定位项目目录，请把脚本放在 scripts 文件夹内或项目文件夹旁再运行
     pause

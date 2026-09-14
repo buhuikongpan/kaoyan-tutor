@@ -34,6 +34,8 @@ class Video(Base):
     subtitle_status = Column(String(20), default="pending")
     summary_path = Column(String(500), default="")    # 课程总结 markdown 文件
     summary_status = Column(String(20), default="none")  # none / pending / processing / done / failed
+    compressed_path = Column(String(500), default="")   # 480p 压缩版视频路径（同步到云端用的就是它）
+    compressed_status = Column(String(20), default="none")  # none / processing / done / failed
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
@@ -59,7 +61,7 @@ class ChatSession(Base):
     subject = Column(String(20), default="math", index=True)
     name = Column(String(255), default="新对话")  # 会话名（首条提问自动命名 / 可重命名）
     model = Column(String(120), default="")  # 会话级模型（空 = 用全局主模型配置）
-    dify_conversation_id = Column(String(64), default="")  # Dify 侧 conversation_id（遗留）
+    effort = Column(String(20), default="")  # 会话级思考强度（low/medium/high/xhigh/max；空 = 用全局默认 high）
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -72,10 +74,12 @@ class ChatMessage(Base):
     conv_id = Column(String(64), index=True, nullable=False)
     subject = Column(String(20), default="math")
     mode = Column(String(8), default="A")
-    role = Column(String(16), nullable=False)  # user / assistant
+    role = Column(String(16), nullable=False)  # user / assistant / tool
     content = Column(Text, default="")  # 纯文本，或含图片时的 JSON 数组
     reasoning = Column(Text, default="")  # DeepSeek 思维链（下轮回填保持连续性）
     quote = Column(Text, default="")  # 引用原文（用户引用 AI 回答某段进行特别说明）
+    tool_calls = Column(Text, default="")  # assistant 要求调用工具时的 tool_calls（JSON 数组）
+    tool_call_id = Column(String(64), default="")  # role=tool 时对应的 tool_call id
     seq = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 

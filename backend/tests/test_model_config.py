@@ -29,14 +29,13 @@ class ModelConfigTest(unittest.TestCase):
     def test_save_and_read(self):
         r = client.post("/api/config/model", json={
             "main": {"base_url": "https://example.com/v1", "api_key": "",
-                     "model": "my-test-model", "multimodal": True},
+                     "model": "my-test-model"},
             "vision": {"enabled": False},
             "asr": {"model": "my-asr-model"},
         })
         self.assertEqual(r.status_code, 200, r.text)
         data = r.json()["config"]
         self.assertEqual(data["main"]["model"], "my-test-model")
-        self.assertTrue(data["main"]["multimodal"])
         self.assertTrue(data["main"]["has_key"])  # 留空 key 保留原 key
         self.assertFalse(data["vision"]["enabled"])
         self.assertEqual(data["asr"]["model"], "my-asr-model")
@@ -52,7 +51,6 @@ class ModelConfigTest(unittest.TestCase):
         # 立即生效：运行时加载到的即是新配置
         live = load_model_config()
         self.assertEqual(live["main"]["model"], "my-test-model")
-        self.assertTrue(live["main"]["multimodal"])
         self.assertFalse(live["vision"]["enabled"])
 
     def test_update_api_key(self):

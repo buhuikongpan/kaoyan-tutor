@@ -3,6 +3,7 @@
 const state = {
     subject: 'math',
     mode: 'A',
+    delMode: false,
     currentVideoId: null,
     currentVideoTitle: '',
     conversationId: '',
@@ -10,8 +11,7 @@ const state = {
     subtitles: [],
     typingId: null,
     isStreaming: false,
-    currentImage: null,
-    currentImageFile: null,
+    images: [],          // 待发送图片数组：{dataUrl, file}，最多 4 张
     autoCapture: false,  // 自动截图当前画面
     uploadController: null,
     currentFolderId: 0,  // 当前选中的文件夹
@@ -46,7 +46,7 @@ function resetViewportScroll() {
         document.body.scrollTop = 0;
     } catch (e) {}
 }
-document.addEventListener('DOMContentLoaded', () => { resetViewportScroll(); switchMode('A'); setupSplitters(); initConvResizer(); restoreConvSidebarState(); initChatEffortSelect(); loadChatModelList(); loadTree().then(() => restoreActiveConversation()); });
+document.addEventListener('DOMContentLoaded', () => { resetViewportScroll(); switchMode('A'); setupSplitters(); initConvResizer(); restoreConvSidebarState(); initChatEffortSelect(); initChatScroll(); loadChatModelList(); loadTree().then(() => restoreActiveConversation()); });
 
 // 终极兜底：任何时刻 document 被滚动（滚动锚定/浏览器内部行为），立即拉回顶部。
 // 用 capture 阶段监听，抢在浏览器完成滚动渲染前复位，防止顶部导航被顶出屏幕、视频滚出视口后黑屏。
@@ -144,10 +144,12 @@ function switchMode(mode) {
     const names = { A: '💬 即时问答', B: '🎯 引导输出', C: '📝 课后问答' };
     const msgs = { A: '👋 看视频随时提问！', B: '🎯 我来出题引导你！', C: '📝 自由提问吧！' };
     document.getElementById('chatModeLabel').textContent = names[mode] || mode;
-    // 模式B：显示侧边栏视频勾选框
+    // 模式B：显示侧边栏视频勾选框（引导输出用）
     document.querySelectorAll('.b-video-cb').forEach(cb => {
         cb.style.display = (mode === 'B') ? 'inline-block' : 'none';
     });
+    // 切换模式时退出批量删除模式（勾选框由 .del-mode class 控制，不常驻）
+    if (state.delMode) exitDelMode();
     clearChat(); addSystemMessage(msgs[mode] || '');
     document.getElementById('subtitlePanel').style.display = (mode === 'A' && state.currentVideoId) ? 'flex' : 'none';
     restoreActiveConversation();
@@ -155,6 +157,7 @@ function switchMode(mode) {
 
 // ===== 文件夹树 =====
 let treeExpanded = {};  // {folderId: true/false}
+let uploadFolderId = 0;  // 上传文件夹选择器的当前值
 
 // JS 加载成功就立即清除 HTML 中的占位文本
 try { const el = document.getElementById('pageLoadCheck'); if (el) el.textContent = '✅ JS 已加载'; } catch(e) {}
@@ -174,8 +177,34 @@ async function loadTree() {
         const data = await resp.json();
         treeCache = data;
         renderTree(data, getTreeFilter());
+        populateUploadFolderSelect(data.folders || []);
+        // 重新渲染后退出批量模式（勾选框状态不再有效）
+        if (state.delMode) exitDelMode();
     } catch (err) {
         container.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><div>${err.message}</div></div>`;
+    }
+}
+
+// ===== 上传文件夹下拉填充 =====
+function populateUploadFolderSelect(folders) {
+    const sel = document.getElementById('uploadFolderSelect');
+    if (!sel) return;
+    const prev = uploadFolderId || 0;
+    let html = '<option value="0">（未分类）</option>';
+    (function walk(fs, d) {
+        for (const f of fs) {
+            const indent = '\u00a0'.repeat(d * 2);
+            html += `<option value="${f.id}"${f.id == prev ? ' selected' : ''}>${indent}${f.name}</option>`;
+            walk(f.children || [], d + 1);
+        }
+    })(folders, 1);
+    sel.innerHTML = html;
+    sel.onchange = () => { uploadFolderId = parseInt(sel.value || '0', 10); };
+    if (uploadFolderId === 0 && sel.querySelector('option[value="0"]')) {
+        // 保持默认选中"未分类"
+    } else {
+        // 尝试选中上次选的
+        try { sel.value = String(uploadFolderId); } catch(e) {}
     }
 }
 
@@ -234,6 +263,7 @@ function onVideoSearch(v) {
     clearTimeout(videoSearchTimer);
     videoSearchTimer = setTimeout(() => {
         renderTree(treeCache, (v || '').trim().toLowerCase());
+        if (state.delMode) exitDelMode();
     }, 200);
 }
 
@@ -291,7 +321,9 @@ function makeVideoNode(v, depth = 0) {
         : (v.summary_status === 'none' || v.summary_status === 'pending')
             && v.subtitle_status === 'done' ? `generateSummary(${v.id})` : '';
     const checked = (state.mode === 'B' && sessionStorage.getItem('b_video_'+v.id) === '1') ? 'checked' : '';
+    const delChecked = sessionStorage.getItem('del_sel_'+v.id) === '1' ? 'checked' : '';
     item.innerHTML = `<div class="tree-video-label" style="padding-left:${depth*16+4}px">
+        <input type="checkbox" class="del-cb" data-video="${v.id}" ${delChecked} onchange="onDelCheckChange(${v.id}, this)">
         <input type="checkbox" class="b-video-cb" data-video="${v.id}" ${checked} style="display:none" onchange="onBCheckChange(${v.id}, this)">
         <span class="tree-icon" onclick="playVideo(${v.id})">🎬</span>
         <span class="tree-vname" onclick="playVideo(${v.id})">${escHtml(v.title || v.filename)}</span>
@@ -318,17 +350,35 @@ function toggleFolder(el) {
 }
 
 // ===== 文件夹 CRUD =====
-function showNewFolderDialog() {
+async function showNewFolderDialog() {
+    // 拉取文件树生成「父级选择」下拉框，支持多级嵌套（专业→章节→视频）
+    let html = '<label>文件夹名称</label><input type="text" id="dlgFolderName" maxlength="255" placeholder="如：第6讲 中值定理">';
+    html += '<label>父级（留空为根目录）</label><select id="dlgFolderParent">';
+    html += '<option value="0">（根目录）</option>';
+    try {
+        const resp = await apiFetch(`/api/folders/tree?subject=${state.subject}`);
+        if (resp.ok) {
+            const data = await resp.json();
+            (function walk(fs, d) {
+                for (const f of fs) {
+                    html += `<option value="${f.id}">${'　'.repeat(d)}${f.name}</option>`;
+                    walk(f.children || [], d + 1);
+                }
+            })(data.folders || [], 1);
+        }
+    } catch (e) { /* 树拉取失败仅影响父级选择，不阻断创建 */ }
+    html += '</select>';
     openDialog({
         title: '📂 新建文件夹',
-        bodyHTML: '<label>文件夹名称</label><input type="text" id="dlgFolderName" maxlength="255" placeholder="如：第6讲 中值定理">',
+        bodyHTML: html,
         okText: '创建',
         onOk: () => {
             const name = document.getElementById('dlgFolderName').value.trim();
             if (!name) { addSystemMessage('⚠️ 名称不能为空'); return; }
+            const pid = parseInt(document.getElementById('dlgFolderParent').value || '0', 10);
             apiFetch('/api/folders/create', {
                 method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({subject: state.subject, name: name}),
+                body: JSON.stringify({subject: state.subject, name: name, parent_id: pid}),
             }).then(r => {
                 closeDialog();
                 if (r.ok) loadTree();
@@ -402,6 +452,7 @@ async function moveVideoDialog(videoId) {
 
 // ===== 播放视频 =====
 async function playVideo(videoId) {
+    hideEndScreen(); // 隐藏结束屏幕
     state.currentVideoId = videoId;
     document.querySelectorAll('.tree-video').forEach(el => el.classList.toggle('active', parseInt(el.dataset.videoId) === videoId));
     closeVideoDrawer(); // 移动端：选完视频自动收起目录抽屉
@@ -447,11 +498,12 @@ async function playVideo(videoId) {
     addSystemMessage(`🎬 播放中`);
 }
 
-// 播放完清掉进度记忆，下次重新从开头播
+// 播放完清掉进度记忆，下次重新从开头播；显示结束屏幕
 document.getElementById('videoPlayer').addEventListener('ended', () => {
     try {
         if (state.currentVideoId) localStorage.removeItem('kaoyan_progress_' + state.currentVideoId);
     } catch (e) {}
+    try { showEndScreen(); } catch (e) {}
 });
 
 function resetPlayer() {
@@ -701,6 +753,7 @@ async function uploadVideo(input) {
     const fd = new FormData();
     fd.append('file', file); fd.append('subject', state.subject);
     fd.append('title', file.name.replace(/\.[^.]+$/, ''));
+    fd.append('folder_id', String(uploadFolderId || 0));
     try {
         const resp = await apiFetch('/api/videos/upload', { method: 'POST', body: fd });
         if (!resp.ok) throw new Error((await resp.json().catch(()=>({}))).detail||'失败');
@@ -734,6 +787,7 @@ async function uploadFolder(input) {
             fd.append('file', file);
             fd.append('subject', state.subject);
             fd.append('title', file.name.replace(/\.[^.]+$/, ''));
+            fd.append('folder_id', String(uploadFolderId || 0));
             const resp = await apiFetch('/api/videos/upload', { method: 'POST', body: fd });
             if (resp.ok) {
                 const data = await resp.json();
@@ -825,6 +879,81 @@ async function deleteVideo(videoId) {
     });
 }
 
+// ===== 批量删除视频（顶部 🗑️ 按钮：首次点击进入批量选择模式，再次点击删除选中）=====
+
+// 进入批量选择模式：显示视频勾选框
+function enterDelMode() {
+    state.delMode = true;
+    const tree = document.getElementById('videoTreeBody');
+    if (tree) tree.classList.add('del-mode');
+    const btn = document.querySelector('.btn-del-batch');
+    if (btn) btn.classList.add('active');
+    addSystemMessage('🖱️ 已进入批量选择模式：勾选要删除的视频，再点一次 🗑️ 确认删除；点 × 或切换科目/模式可取消。');
+}
+
+// 退出批量选择模式（不自动清空已勾选项，避免误清已做选择）
+function exitDelMode() {
+    if (!state.delMode) return;
+    state.delMode = false;
+    const tree = document.getElementById('videoTreeBody');
+    if (tree) tree.classList.remove('del-mode');
+    const btn = document.querySelector('.btn-del-batch');
+    if (btn) btn.classList.remove('active');
+}
+
+function getDelSelectedIds() {
+    const ids = [];
+    document.querySelectorAll('#videoTreeBody .del-cb:checked').forEach(cb => ids.push(Number(cb.dataset.video)));
+    return ids;
+}
+
+function updateDelBatchCount() {
+    const n = getDelSelectedIds().length;
+    const badge = document.getElementById('delBatchCount');
+    if (!badge) return;
+    badge.style.display = n ? 'inline-block' : 'none';
+    badge.textContent = n;
+}
+
+function onDelCheckChange(videoId, cb) {
+    if (cb.checked) sessionStorage.setItem('del_sel_' + videoId, '1');
+    else sessionStorage.removeItem('del_sel_' + videoId);
+    updateDelBatchCount();
+}
+
+async function onDelBatchClick() {
+    // 未进入批量模式：首次点击 → 进入批量选择模式
+    if (!state.delMode) {
+        enterDelMode();
+        updateDelBatchCount();
+        return;
+    }
+    // 已进入批量模式：二次点击 → 执行删除
+    const ids = getDelSelectedIds();
+    if (!ids.length) { addSystemMessage('⚠️ 尚未勾选任何视频，再次点击 🗑️ 退出批量模式'); return; }
+    openDialog({
+        title: '🗑️ 批量删除视频',
+        bodyHTML: `<div class="dialog-warn">将删除选中的 <b>${ids.length}</b> 个视频文件及其字幕/总结记录，<b>不可恢复</b>。确定继续吗？</div>`,
+        okText: '删除',
+        onOk: () => {
+            exitDelMode();
+            apiFetch('/api/videos/batch-delete', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ids: ids}),
+            }).then(async r => {
+                closeDialog();
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) { addSystemMessage(`⚠️ ${d.detail || '批量删除失败'}`); return; }
+                // 清理已删除视频的勾选状态
+                ids.forEach(id => sessionStorage.removeItem('del_sel_' + id));
+                if (state.currentVideoId && ids.includes(state.currentVideoId)) resetPlayer();
+                addSystemMessage(`✅ 已删除 ${d.success || 0} 个视频` + (d.failed ? `，失败 ${d.failed} 个` : ''));
+                loadTree();
+            });
+        },
+    });
+}
+
 // ===== 重新扫描本地目录（找回手动放入 storage/videos 的视频）=====
 async function rescanVideos() {
     addSystemMessage('🔎 正在扫描本地视频目录...');
@@ -899,13 +1028,20 @@ async function generateSummary(videoId) {
 }
 
 // ===== 聊天 =====
+// ask 卡片的待答内容：非空 = 这次发送是"回答 AI 的提问"（作为 tool 结果续上，不再新增用户气泡）
+let pendingAsk = null;
+
 async function sendMessage() {
     const input = document.getElementById('chatInput');
     const text = input.value.trim();
-    if ((!text && !state.currentImage) || state.isStreaming) return;
-    const displayText = text || '[查看图片]';
-    input.value = '';
-    addUserMessage(displayText, state.currentImage, quoteState ? quoteState.text : '');
+    const hasImages = state.images.length > 0;
+    const isAskReply = !!pendingAsk;
+    if ((!text && !hasImages && !isAskReply) || state.isStreaming) return;
+    if (!isAskReply) {
+        const displayText = text || '[查看图片]';
+        input.value = '';
+        addUserMessage(displayText, state.images.map(i => i.dataUrl), quoteState ? quoteState.text : '');
+    }
     document.getElementById('btnSend').disabled = true;
     state.isStreaming = true;
     let typingId = showTyping();  // 思考期间显示"打字中"
@@ -933,19 +1069,22 @@ async function sendMessage() {
 
         // 统一走 SSE 流式端点（文本/图片/自动截图/模式B 勾选都走 FormData）
         const fd = new FormData();
-        fd.append('query', text || '分析图片');
+        fd.append('query', text || (isAskReply ? '' : '分析图片'));
         fd.append('subject', state.subject);
         fd.append('mode', state.mode);
         fd.append('subtitle_context', state.mode === 'A' ? await getModeASubtitleContext() : '');
         fd.append('conversation_id', state.conversationId);
+        if (isAskReply) {
+            // ask 回答轮：把用户作答作为 tool 结果回填，后端接着这一轮继续推理
+            fd.append('ask_answers', JSON.stringify(pendingAsk));
+            pendingAsk = null;
+        }
         if (quoteState && quoteState.text) fd.append('quote', JSON.stringify({ text: quoteState.text }));
         if (state.mode === 'B') fd.append('watched_video_ids', JSON.stringify(getSelectedBVideos()));
-        if (state.currentImage) {
-            fd.append('image', state.currentImageFile);
-            removeImage();
-        } else if (captureBlob) {
-            fd.append('image', captureBlob, 'frame.jpg');
-        }
+        // 手动粘贴/选择的图片全部发出去（同名多字段）；自动截图帧若存在也一并发送
+        state.images.forEach(img => fd.append('image', img.file));
+        if (captureBlob) fd.append('image', captureBlob, 'frame.jpg');
+        removeImage();  // 清空待发图并隐藏预览
 
         const resp = await apiFetch('/api/chat/send-stream', { method: 'POST', body: fd });
         if (!resp.ok) {
@@ -1062,6 +1201,7 @@ async function sendMessage() {
         };
         let sseError = '';
         let done = false;
+        let askEvent = null;   // 模型要求调用 ask 工具时的事件（questions/tool_call_id/text）
         // 进入流式即启动心跳：覆盖"等待首个 token"的静默期
         streamStartTime = Date.now();
         startThinkingTimer();
@@ -1069,10 +1209,10 @@ async function sendMessage() {
         const renderReasoningThrottled = () => {
             const now = Date.now();
             if (now - reasoningLastRender > 50) {
+                // 只更新思考文本，不做任何自动滚动（用户可自由上翻阅读，不被打断）
                 reasoningBody.textContent = reasoningText;
-                reasoningBody.scrollTop = reasoningBody.scrollHeight;
                 reasoningLastRender = now;
-                scrollChat();
+                updateScrollToBottomBtn();
             }
         };
         const renderThrottled = () => {
@@ -1081,7 +1221,7 @@ async function sendMessage() {
             if (now - lastRender > 50) {
                 flushStream();
                 lastRender = now;
-                scrollChat();
+                updateScrollToBottomBtn();
             }
         };
         // 正文开始后：思考块收起为一行，可点击展开
@@ -1139,6 +1279,10 @@ async function sendMessage() {
                         saveActiveConv();
                         clearQuote();  // 发送成功，撤销引用条
                         done = true;
+                    } else if (obj.type === 'ask') {
+                        askEvent = obj;
+                    } else if (obj.type === 'tool') {
+                        showToolHint(streamingEl, obj);
                     } else if (obj.type === 'error') {
                         sseError = obj.detail || 'AI 调用失败';
                     }
@@ -1158,7 +1302,9 @@ async function sendMessage() {
                 flushStreamStaticPart(activeStart, raw.length);
             }
             activeDom.remove();
-            streamingContent.querySelector('.msg-time').textContent = time();
+            streamingEl.querySelector('.msg-time').textContent = time();
+            // ask 工具：把 AI 的提问渲染成可交互卡片（提交后作为 tool 结果续上这一轮）
+            if (askEvent && !sseError) renderAskCard(streamingEl, askEvent);
             scrollChat();
         }
         if (reasoningStarted && !sseError) {
@@ -1194,32 +1340,44 @@ function onInputKeydown(e) {
 }
 
 // Ctrl+V 粘贴图片
+// ===== 多图支持：统一加入待发送队列（最多 MAX_IMAGES 张，单张 ≤10MB）=====
+const MAX_IMAGES = 4;
+function addImages(files) {
+    if (!files || !files.length) return;
+    let added = 0;
+    for (const file of files) {
+        if (!file.type || !file.type.startsWith('image/')) continue;
+        if (file.size > 10 * 1024 * 1024) { addSystemMessage('⚠️ 单张图片最大 10MB'); continue; }
+        if (state.images.length >= MAX_IMAGES) {
+            addSystemMessage(`⚠️ 一次最多 ${MAX_IMAGES} 张图片`);
+            break;
+        }
+        const reader = new FileReader();
+        reader.onload = ev => {
+            state.images.push({ dataUrl: ev.target.result, file });
+            renderImagePreview();
+            addSystemMessage(`📋 已添加图片（${state.images.length}/${MAX_IMAGES}）`);
+        };
+        reader.readAsDataURL(file);
+        added++;
+    }
+}
+
 // Ctrl+V 粘贴图片（同时监听 document 级别 + HTML onpaste）
 function onPaste(e) {
     const items = e.clipboardData?.items;
     if (!items) { addSystemMessage('⚠️ 无法读取剪贴板'); return; }
-    let found = false;
+    const files = [];
     for (const item of items) {
         if (item.type.startsWith('image/')) {
             e.preventDefault();
             const file = item.getAsFile();
-            if (!file) { addSystemMessage('⚠️ 剪贴板图片无法读取'); continue; }
-            if (file.size > 10*1024*1024) { addSystemMessage('⚠️ 图片最大 10MB'); return; }
-            state.currentImageFile = file;
-            const reader = new FileReader();
-            reader.onload = ev => {
-                state.currentImage = ev.target.result;
-                const preview = document.getElementById('imagePreview');
-                document.getElementById('previewImg').src = ev.target.result;
-                preview.style.display = 'inline-flex';
-                addSystemMessage('📋 已粘贴图片');
-            };
-            reader.readAsDataURL(file);
-            found = true;
-            break;
+            if (file) files.push(file);
         }
     }
-    if (!found && items.length > 0) {
+    if (files.length) {
+        addImages(files);
+    } else if (items.length > 0) {
         addSystemMessage('ℹ️ 剪贴板中没有图片');
     }
 }
@@ -1275,20 +1433,42 @@ async function getModeASubtitleContext() {
     return `【当前播放位置：${pos}】 ${full}`;
 }
 
-// ===== 图片上传 =====
+// ===== 图片上传（支持多选，最多 MAX_IMAGES 张）=====
 function onImagePick(input) {
-    const file = input.files[0]; if (!file) return;
-    if (!file.type.startsWith('image/')) { alert('请选图片'); return; }
-    if (file.size>10*1024*1024) { alert('最大 10MB'); return; }
-    state.currentImageFile = file;
-    const r = new FileReader();
-    r.onload = e => { state.currentImage = e.target.result;
-        document.getElementById('previewImg').src = e.target.result;
-        document.getElementById('imagePreview').style.display = 'inline-flex'; };
-    r.readAsDataURL(file); input.value = '';
+    const files = input.files ? Array.from(input.files) : [];
+    input.value = '';
+    if (!files.length) return;
+    addImages(files);
 }
-function removeImage() { state.currentImage=null; state.currentImageFile=null;
-    document.getElementById('imagePreview').style.display='none'; }
+
+// 渲染待发送图片的缩略图预览（每张可单独删除）
+function renderImagePreview() {
+    const preview = document.getElementById('imagePreview');
+    if (!preview) return;
+    preview.innerHTML = '';
+    if (!state.images.length) {
+        preview.style.display = 'none';
+        return;
+    }
+    state.images.forEach((img, i) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'image-preview-item';
+        wrap.innerHTML = `<img src="${img.dataUrl}" alt="预览${i + 1}">
+            <button class="btn-remove-img" onclick="removeImage(${i})" aria-label="移除图片${i + 1}">✕</button>`;
+        preview.appendChild(wrap);
+    });
+    preview.style.display = 'flex';
+}
+
+// 移除指定下标（无参会自动删除时兼容旧调用：移除全部）
+function removeImage(idx) {
+    if (typeof idx === 'number') {
+        state.images.splice(idx, 1);
+    } else {
+        state.images = [];
+    }
+    renderImagePreview();
+}
 
 // ===== 语音输入（浏览器录音 → 后端 Whisper/千问转文字 → 填入输入框）
 // 实时草稿：本地引擎下每 2.5s 把「从开头到现在的完整音频」送转一次并刷新输入框
@@ -1470,26 +1650,141 @@ async function finalizeVoice() {
 }
 
 // ===== 消息渲染 =====
-function addUserMessage(text, img, quote) {
+function addUserMessage(text, imgs, quote) {
     let html = `<div class="message user">`;
     if (quote && quote.trim()) html += `<div class="quote-bubble">📎 引用：${escHtml(quote)}</div>`;
-    if (img) html += `<div class="msg-content"><img src="${img}" class="chat-img" onload="scrollChat()"><br>${escHtml(text)}</div>`;
-    else html += `<div class="msg-content">${escHtml(text)}</div>`;
+    if (imgs && imgs.length) {
+        const imgsHtml = imgs.map(src => `<img src="${src}" class="chat-img" onload="scrollChat()">`).join('');
+        html += `<div class="msg-content">${imgsHtml}<br>${escHtml(text)}</div>`;
+    } else {
+        html += `<div class="msg-content">${escHtml(text)}</div>`;
+    }
     html += `<div class="msg-time">${time()}</div></div>`;
     // F3：insertAdjacentHTML 仅追加新节点，避免整段 chatMessages 重解析（innerHTML +=）
-    document.getElementById('chatMessages').insertAdjacentHTML('beforeend', html); scrollChat();
+    document.getElementById('chatMessages').insertAdjacentHTML('beforeend', html); scrollChat(true);
 }
 function addAssistantMessage(text) {
     const safe = escHtml(text);
     const withMath = renderMath(safe);
     document.getElementById('chatMessages').insertAdjacentHTML('beforeend',
         `<div class="message assistant"><div class="msg-content">${withMath}</div><div class="msg-time">${time()}</div></div>`);
-    scrollChat();
+    scrollChat(true);
 }
 function addSystemMessage(text) {
     document.getElementById('chatMessages').insertAdjacentHTML('beforeend',
         `<div class="message system"><div class="msg-content">${escHtml(text)}</div></div>`);
+    scrollChat(true);
+}
+
+// ===== 工具调用提示（read_image / modlens_read_image 等）=====
+// 模型调工具期间给用户一个可见反馈：正在看图 / 已看完
+const TOOL_HINTS = {
+    read_image: '📷 查看图片',
+    modlens_read_image: '🔍 用视觉模型识别图片',
+    ask_user_question: '❓ 需要你确认',
+};
+function showToolHint(msgEl, ev) {
+    try {
+        let box = msgEl.querySelector('.tool-hints');
+        if (!box) {
+            box = document.createElement('div');
+            box.className = 'tool-hints';
+            const content = msgEl.querySelector('.msg-content');
+            if (content) msgEl.insertBefore(box, content); else msgEl.appendChild(box);
+        }
+        let row = box.querySelector(`[data-tool="${ev.name}"]`);
+        if (!row) {
+            row = document.createElement('div');
+            row.className = 'tool-hint';
+            row.dataset.tool = ev.name;
+            box.appendChild(row);
+        }
+        const base = TOOL_HINTS[ev.name] || `🛠 调用 ${ev.name}`;
+        const suffix = ev.status === 'running' ? '中…' : (ev.status === 'done' ? '完成 ✓' : '失败');
+        row.textContent = base + suffix;
+        row.classList.toggle('failed', ev.status === 'failed');
+        row.classList.toggle('running', ev.status === 'running');
+        scrollChat();
+    } catch (e) { /* 提示失败不影响主流程 */ }
+}
+
+// ===== ask 工具（ask_user_question）：AI 需要用户拍板时弹出的问答卡片 =====
+// 提问文本遵守公式铁律，这里同样走 renderMath 渲染 $...$ / $$...$$
+function askQuestionsHtml(questions) {
+    return (questions || []).map(q => `
+        <div class="ask-block">
+            ${q.header ? `<div class="ask-header">${escHtml(q.header)}</div>` : ''}
+            <div class="ask-question">${renderMath(escHtml(q.question || ''))}</div>
+            ${(q.options || []).length ? `<div class="ask-options">${q.options.map(o => `
+                <div class="ask-option readonly"><span class="ask-option-main">
+                    <span class="ask-option-label">${renderMath(escHtml(o.label || ''))}</span>
+                    ${o.description ? `<span class="ask-option-desc">${renderMath(escHtml(o.description))}</span>` : ''}
+                </span></div>`).join('')}</div>` : ''}
+        </div>`).join('');
+}
+
+function renderAskCard(msgEl, ask) {
+    const questions = ask.questions || [];
+    if (!questions.length) return;
+    const group = 'askg_' + Math.random().toString(36).slice(2, 8);
+    const card = document.createElement('div');
+    card.className = 'ask-card';
+    card.innerHTML = questions.map((q, qi) => {
+        const options = q.options || [];
+        const inputType = q.multi_select ? 'checkbox' : 'radio';
+        return `
+        <div class="ask-block" data-idx="${qi}">
+            ${q.header ? `<div class="ask-header">${escHtml(q.header)}</div>` : ''}
+            <div class="ask-question">${renderMath(escHtml(q.question || ''))}</div>
+            ${options.length ? `<div class="ask-options">${options.map(o => `
+                <label class="ask-option">
+                    <input type="${inputType}" name="${group}_${qi}" value="${escAttr(o.label || '')}">
+                    <span class="ask-option-main">
+                        <span class="ask-option-label">${renderMath(escHtml(o.label || ''))}</span>
+                        ${o.description ? `<span class="ask-option-desc">${renderMath(escHtml(o.description))}</span>` : ''}
+                    </span>
+                </label>`).join('')}</div>` : ''}
+            <input type="text" class="ask-custom" maxlength="500"
+                   placeholder="${options.length ? '也可以自己写答案…' : '输入你的回答…'}">
+        </div>`;
+    }).join('') + `
+        <div class="ask-foot">
+            <button type="button" class="ask-submit">提交</button>
+            <span class="ask-hint">回答后 AI 接着往下讲</span>
+        </div>`;
+    card.querySelector('.ask-submit').addEventListener('click', () => submitAskCard(card, ask));
+    msgEl.appendChild(card);
     scrollChat();
+}
+
+function submitAskCard(card, ask) {
+    if (state.isStreaming) return;   // 正在生成时不允许提交
+    const answers = [];
+    (ask.questions || []).forEach((q, qi) => {
+        const block = card.querySelector(`.ask-block[data-idx="${qi}"]`);
+        if (!block) return;
+        const selected = [...block.querySelectorAll('input[type=radio]:checked, input[type=checkbox]:checked')]
+            .map(i => i.value);
+        const custom = (block.querySelector('.ask-custom').value || '').trim();
+        if (!selected.length && !custom) return;
+        const item = { id: q.id, selected: selected };
+        if (custom) item.custom = custom;
+        answers.push(item);
+    });
+    if (!answers.length) { addSystemMessage('⚠️ 请先选择或填写一个回答'); return; }
+    // 卡片转为已提交态：禁用输入 + 回显用户的选择（历史里同样能看到）
+    card.classList.add('submitted');
+    card.querySelectorAll('input, button').forEach(el => { el.disabled = true; });
+    const echo = document.createElement('div');
+    echo.className = 'ask-echo';
+    echo.textContent = '✅ ' + answers.map(a => {
+        const parts = [...(a.selected || [])];
+        if (a.custom) parts.push(a.custom);
+        return parts.join('、');
+    }).join('；');
+    card.appendChild(echo);
+    pendingAsk = { tool_call_id: ask.tool_call_id, answers: answers };
+    sendMessage();
 }
 // 思维链块：点击标题行展开/折叠（流式与新历史消息共用）
 function toggleReasoning(headerEl) {
@@ -1497,29 +1792,54 @@ function toggleReasoning(headerEl) {
     if (!block) return;
     const collapsed = block.classList.toggle('collapsed');
     headerEl.querySelector('.reasoning-arrow').textContent = collapsed ? '▶' : '▼';
-    if (!collapsed) {
-        const body = block.querySelector('.reasoning-body');
-        if (body) body.scrollTop = body.scrollHeight;
-    }
+    // 展开时不再自动滚到思考内容末尾，避免打断用户从头阅读
 }
 let typingCount=0;
 function showTyping() { const id=++typingCount;
     document.getElementById('chatMessages').insertAdjacentHTML('beforeend', `<div class="message assistant" id="typing-${id}"><div class="msg-content"><div class="typing-indicator"><span></span><span></span><span></span></div></div></div>`);
-    scrollChat(); return id; }
+    scrollChat(true); return id; }
 function removeTyping(id) { const e=document.getElementById(`typing-${id}`); if(e) e.remove(); }
 function clearChat() { document.getElementById('chatMessages').innerHTML=''; }
-function scrollChat() {
+// ===== 聊天滚动策略 =====
+// 流式输出（思考链 / 正文）期间不做任何自动滚动，用户可自由上翻阅读，不被打断；
+// 只有「发送消息 / 切换会话 / 加载历史」等主动操作才强制滚到底。
+// 非强制调用（图片异步加载、流式收尾等）仅在用户本就在底部附近时才跟随。
+const CHAT_STICK_THRESHOLD_PX = 80;   // 距底部多少 px 内视为"贴底"
+function isChatNearBottom(box) {
+    if (!box) return true;
+    return box.scrollHeight - box.scrollTop - box.clientHeight <= CHAT_STICK_THRESHOLD_PX;
+}
+function updateScrollToBottomBtn() {
+    const btn = document.getElementById('scrollToBottomBtn');
+    if (!btn) return;
+    const box = document.getElementById('chatMessages');
+    btn.classList.toggle('show', !!box && !isChatNearBottom(box));
+}
+function initChatScroll() {
+    const box = document.getElementById('chatMessages');
+    if (!box || box.dataset.scrollBound) return;
+    box.dataset.scrollBound = '1';
+    box.addEventListener('scroll', updateScrollToBottomBtn, { passive: true });
+    updateScrollToBottomBtn();
+}
+function scrollChat(force = false) {
     const box = document.getElementById('chatMessages');
     if (!box || !box.scrollHeight) return;
+    if (!force && !isChatNearBottom(box)) return;   // 用户已上翻：绝不拽回
+    const toBottom = () => { box.scrollTop = box.scrollHeight; updateScrollToBottomBtn(); };
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                box.scrollTop = box.scrollHeight;
-            });
+            requestAnimationFrame(toBottom);
         });
     });
     // 兜底：100ms 后再滚一次（防 KaTeX / 图片异步加载导致布局延迟）
-    setTimeout(() => { if (box) box.scrollTop = box.scrollHeight; }, 100);
+    setTimeout(toBottom, 100);
+}
+// 「↓ 回到底部」：强制滚到底并恢复跟随，同时隐藏按钮
+function jumpChatToBottom() {
+    const btn = document.getElementById('scrollToBottomBtn');
+    if (btn) btn.classList.remove('show');
+    scrollChat(true);
 }
 
 // ===== 会话管理（新建/删除/重命名/选择/按科目分组） =====
@@ -1636,19 +1956,37 @@ async function selectConversation(convId) {
             const qBlock = (msg.quote && msg.quote.trim())
                 ? `<div class="quote-bubble">📎 引用：${escHtml(msg.quote)}</div>` : '';
             if (msg.role === 'user') {
-                html += `<div class="message user">${qBlock}<div class="msg-content">${escHtml(msg.content)}</div><div class="msg-time">${time()}</div></div>`;
+                const imgsHtml = (msg.images && msg.images.length)
+                    ? msg.images.map(src => `<img src="${src}" class="chat-img">`).join('') : '';
+                html += `<div class="message user">${qBlock}<div class="msg-content">${imgsHtml}${escHtml(msg.content)}</div><div class="msg-time">${time()}</div></div>`;
+            } else if (msg.role === 'tool') {
+                // ask 工具的回答：历史里回显用户当时的作答
+                const txt = (msg.answers || []).map(a => {
+                    const parts = [...(a.selected || [])];
+                    if (a.custom) parts.push(a.custom);
+                    return parts.join('、');
+                }).filter(Boolean).join('；');
+                if (txt) html += `<div class="message user ask-answer"><div class="msg-content">✅ ${escHtml(txt)}</div><div class="msg-time">${time()}</div></div>`;
             } else if (msg.role === 'assistant') {
+                const hasText = (msg.content || '').trim();
+                const hasReason = (msg.reasoning || '').trim();
+                const hasAsk = !!(msg.ask_questions && msg.ask_questions.length);
+                // 纯工具调用轮（模型只调了 read_image/modlens 还没说话）：不渲染空气泡
+                if (!hasText && !hasReason && !hasAsk) continue;
                 // 历史消息带思维链时显示折叠的思考块（点击可展开）
-                const rBlock = (msg.reasoning && msg.reasoning.trim())
+                const rBlock = hasReason
                     ? `<div class="reasoning-block collapsed"><div class="reasoning-header" onclick="toggleReasoning(this)"><span class="reasoning-arrow">▶</span><span class="reasoning-title">🧠 已深度思考（点击展开）</span></div><div class="reasoning-body">${escHtml(msg.reasoning)}</div></div>`
                     : '';
-                html += `<div class="message assistant">${rBlock}<div class="msg-content">${renderMath(escHtml(msg.content))}</div><div class="msg-time">${time()}</div></div>`;
+                // 当时调用过 ask 工具：把问题以只读卡片形式一并还原
+                const askBlock = hasAsk
+                    ? `<div class="ask-card submitted readonly">${askQuestionsHtml(msg.ask_questions)}</div>` : '';
+                html += `<div class="message assistant">${rBlock}<div class="msg-content">${renderMath(escHtml(msg.content))}</div>${askBlock}<div class="msg-time">${time()}</div></div>`;
             }
         }
         if (!d.messages.length) html += '<div class="message system"><div class="msg-content">（空对话）</div></div>';
         box.innerHTML = html;
         // 布局完成后再滚到底部（scrollChat 内部有三层 rAF + 100ms 兜底）
-        scrollChat();
+        scrollChat(true);
         loadConversations();
     } catch(e){ addSystemMessage('️ '+e.message); }
 }
@@ -1936,6 +2274,8 @@ function closeDialog(e) {
     const modal = document.getElementById('dialogModal');
     if (modal) modal.style.display = 'none';
     dialogOkHandler = null;
+    // 关闭对话框时若处于批量删除模式则退出（取消/ESC/点背景均生效），无副作用执行
+    exitDelMode();
 }
 
 function dialogOk() {
@@ -1953,7 +2293,7 @@ document.getElementById('dialogModal').addEventListener('keydown', (e) => {
 
 // ===== 设置页一键填充常用服务 =====
 const API_PRESETS = {
-    main:   { base_url: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash', multimodal: false },
+    main:   { base_url: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash' },
     vision: { base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4v-flash' },
     asr:    { base_url: 'https://dashscope.aliyuncs.com', model: 'qwen3-asr-flash' },
 };
@@ -1961,7 +2301,7 @@ const API_PRESETS = {
 function applyPreset(section) {
     const p = API_PRESETS[section];
     const ids = {
-        main:   { base: 'setMainBaseUrl', model: 'setMainModel', mm: 'setMainMultimodal' },
+        main:   { base: 'setMainBaseUrl', model: 'setMainModel' },
         vision: { base: 'setVisionBaseUrl', model: 'setVisionModel' },
         asr:    { base: 'setAsrBaseUrl', model: 'setAsrModel' },
     };
@@ -1971,10 +2311,6 @@ function applyPreset(section) {
     if (elBase) elBase.value = p.base_url;
     const elModel = document.getElementById(m.model);
     if (elModel) elModel.value = p.model;
-    if (m.mm) {
-        const mm = document.getElementById(m.mm);
-        if (mm) mm.checked = !!p.multimodal;
-    }
     if (elBase) {
         elBase.style.borderColor = 'var(--color-primary)';
         setTimeout(() => { elBase.style.borderColor = ''; }, 1000);
@@ -2019,8 +2355,6 @@ async function loadModelConfig() {
         fill('setMainName', c.main && c.main.name);
         fill('setMainBaseUrl', c.main && c.main.base_url);
         fill('setMainModel', c.main && c.main.model);
-        const mm = document.getElementById('setMainMultimodal');
-        if (mm) mm.checked = !!(c.main && c.main.multimodal);
         const compactA = document.getElementById('setCompactA');
         if (compactA) compactA.checked = isCompactASubjectCtx();
         ph('setMainKey', c.main && c.main.has_key);
@@ -2348,7 +2682,6 @@ async function saveSettings() {
             base_url: (mA.base_url || '').trim(),
             api_key: (mA.api_key || '').trim(),
             model: mdl0(mA),
-            multimodal: document.getElementById('setMainMultimodal') ? document.getElementById('setMainMultimodal').checked : false,
         },
         vision: {
             enabled: document.getElementById('setVisionEnabled') ? document.getElementById('setVisionEnabled').checked : true,
@@ -2836,3 +3169,138 @@ function time() { const n=new Date(); return `${String(n.getHours()).padStart(2,
         if (spinner) spinner.style.display = 'none';
     });
 })();
+
+// ==================================================================
+// 视频播放结束屏幕（End Screen）
+// ==================================================================
+
+// 从 treeCache 中递归提取所有视频的扁平列表（保持目录树的显示顺序）
+// 注意：接口返回的结构是 folder.children = 子文件夹、folder.videos = 本文件夹的视频，
+// folder 本身没有 type 字段 —— 旧实现按 children 递归并把 folder 当视频收集，
+// 导致 findCurrentVideoIndex() 永远找不到当前视频，「上一课/下一课」按钮被隐藏。
+function getAllVideosFlat() {
+    if (!treeCache) return [];
+    const result = [];
+    const pushVideos = (videos) => {
+        for (const v of (videos || [])) {
+            result.push({ id: v.id, title: v.title || v.filename });
+        }
+    };
+    const walkFolder = (f) => {
+        for (const c of (f.children || [])) walkFolder(c);  // 先子文件夹（与树渲染顺序一致）
+        pushVideos(f.videos);                               // 再本文件夹的视频
+    };
+    for (const f of (treeCache.folders || [])) walkFolder(f);
+    pushVideos(treeCache.uncategorized);                    // 未分类排在最后
+    return result;
+}
+
+// 查找当前视频在列表中的索引（id 可能是数字或字符串，统一按数字比较）
+function findCurrentVideoIndex() {
+    if (state.currentVideoId == null) return -1;
+    const cur = Number(state.currentVideoId);
+    const list = getAllVideosFlat();
+    return list.findIndex(v => Number(v.id) === cur);
+}
+
+// 获取上一个视频的 ID
+function getPrevVideoId() {
+    const list = getAllVideosFlat();
+    const idx = findCurrentVideoIndex();
+    if (idx > 0) return list[idx - 1].id;
+    return null;
+}
+
+// 获取下一个视频的 ID
+function getNextVideoId() {
+    const list = getAllVideosFlat();
+    const idx = findCurrentVideoIndex();
+    if (idx >= 0 && idx < list.length - 1) return list[idx + 1].id;
+    return null;
+}
+
+// 刷新结束屏幕上的"上一课 / 下一课"按钮可见性
+function refreshEndButtons() {
+    const prevBtn = document.getElementById('endPrevBtn');
+    const nextBtn = document.getElementById('endNextBtn');
+    if (prevBtn) prevBtn.style.display = getPrevVideoId() ? '' : 'none';
+    if (nextBtn) nextBtn.style.display = getNextVideoId() ? '' : 'none';
+}
+
+// 显示结束屏幕
+function showEndScreen() {
+    try {
+        const el = document.getElementById('videoEndScreen');
+        if (!el) return;
+        // 暂停视频（确保画面停住）
+        const video = document.getElementById('videoPlayer');
+        if (video && !video.paused) video.pause();
+        refreshEndButtons();
+        el.style.display = 'flex';
+        // 目录树还没加载（例如刷新后直接续播）时，拉一次树再校正按钮
+        if (!treeCache) loadTree().then(() => refreshEndButtons()).catch(() => {});
+    } catch (e) { console.warn('showEndScreen error:', e); }
+}
+
+// 隐藏结束屏幕
+function hideEndScreen() {
+    try {
+        const el = document.getElementById('videoEndScreen');
+        if (!el) return;
+        el.style.display = 'none';
+    } catch (e) { console.warn('hideEndScreen error:', e); }
+}
+
+// 重播当前视频
+function onEndReplay() {
+    try {
+        const video = document.getElementById('videoPlayer');
+        if (!video || !state.currentVideoId) return;
+        hideEndScreen();
+        video.currentTime = 0;
+        video.play().catch(() => {});
+        addSystemMessage(`↻ 重新开始播放`);
+    } catch (e) { console.warn('onEndReplay error:', e); }
+}
+
+// 上一个视频
+function onEndPrev() {
+    try {
+        const prevId = getPrevVideoId();
+        if (!prevId) return;
+        hideEndScreen();
+        playVideo(prevId);
+    } catch (e) { console.warn('onEndPrev error:', e); }
+}
+
+// 下一个视频
+function onEndNext() {
+    try {
+        const nextId = getNextVideoId();
+        if (!nextId) return;
+        hideEndScreen();
+        playVideo(nextId);
+    } catch (e) { console.warn('onEndNext error:', e); }
+}
+
+// ESC 键关闭结束屏幕
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const el = document.getElementById('videoEndScreen');
+        if (el && el.style.display !== 'none') {
+            hideEndScreen();
+        }
+    }
+});
+
+// 点击结束屏幕空白区域也可关闭
+try {
+    const endScreenEl = document.getElementById('videoEndScreen');
+    if (endScreenEl) {
+        endScreenEl.addEventListener('click', (e) => {
+            if (e.target === endScreenEl) {
+                hideEndScreen();
+            }
+        });
+    }
+} catch (e) {}

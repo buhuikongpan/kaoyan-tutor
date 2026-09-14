@@ -1,11 +1,31 @@
 """数据库：引擎 / 会话工厂 / 声明基类 / 初始化迁移"""
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 from .config import settings
 
+# SQLite 并发优化：
+# - WAL 模式：读写不互斥（读不阻塞写、写不阻塞读），SSE 长流式读 + 后台总结写入
+#   同时进行时不再报 database is locked；也显著降低磁盘同步次数。
+# - busy_timeout=5000：写锁短暂被占时等待重试而非立刻报锁错误。
+# - synchronous=NORMAL：WAL 下 checkpoint 频率降低，写入吞吐更高（崩溃最多丢最近提交，
+#   对本平台聊天/状态数据可接受；进度/字幕属可重建数据）。
+def _set_sqlite_pragma(dbapi_conn, _):
+    try:
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.execute("PRAGMA wal_autocheckpoint=1000")
+        cur.close()
+    except Exception:
+        pass
+
+
 engine = create_engine(settings.database_url, connect_args={"check_same_thread": False})
+if settings.database_url.startswith("sqlite"):
+    event.listen(engine, "connect", _set_sqlite_pragma)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -32,8 +52,13 @@ def _migrate():
     # 历史版本逐个补列
     add_column("chat_sessions", "name", "TEXT")
     add_column("chat_sessions", "model", "VARCHAR(120) DEFAULT ''")
+    add_column("chat_sessions", "effort", "VARCHAR(20) DEFAULT ''")
     add_column("videos", "summary_status", "VARCHAR(20) DEFAULT 'none'")
     add_column("videos", "summary_path", "VARCHAR(500) DEFAULT ''")
+    add_column("videos", "compressed_path", "VARCHAR(500) DEFAULT ''")
+    add_column("videos", "compressed_status", "VARCHAR(20) DEFAULT 'none'")
     add_column("chat_messages", "quote", "TEXT")
+    add_column("chat_messages", "tool_calls", "TEXT")
+    add_column("chat_messages", "tool_call_id", "VARCHAR(64) DEFAULT ''")
     if "chat_messages" not in tables:
         print("[migrate] 将创建 chat_messages 表")

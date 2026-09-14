@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .core.config import settings, BASE_DIR
 from .core.database import init_db, SessionLocal
+from .core.path_migration import normalize_paths
 from .models import Video
 from .api.routes import videos, chat, config, folders, voice
 
@@ -17,11 +18,20 @@ from .api.routes import videos, chat, config, folders, voice
 DB_PATH = str(BASE_DIR / "data" / "kaoyan.db")
 FRONTEND_DIR = str(BASE_DIR / "frontend")
 
-app = FastAPI(title="考研学习平台", version="2.2.2")
+app = FastAPI(title="考研学习平台", version="2.3.0")
 
 # 退出时备份数据库（data/kaoyan.db.bak）
 def _backup_db():
     try:
+        # 数据库已启用 WAL 模式：直接拷贝主库会漏掉 -wal 文件里的最新提交。
+        # 备份前先 checkpoint，把 WAL 内容合并回主库，再拷贝主库（连同残留 wal/shm 一并排除）。
+        import sqlite3 as _sqlite3
+        try:
+            with _sqlite3.connect(DB_PATH, timeout=5.0) as _conn:
+                _conn.execute("BEGIN")
+                _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            pass  # checkpoint 失败不阻断备份尝试，仍拷贝（可能略旧）
         shutil.copy2(DB_PATH, DB_PATH + ".bak")
         print(f"[ok] 数据库已备份: {DB_PATH}.bak")
     except Exception:
@@ -88,11 +98,26 @@ try:
 except Exception:
     pass
 
+# 启动巡检：把库里的绝对路径规范化为相对项目根的路径（搬家/改名后自动修复，幂等）
+try:
+    s = SessionLocal()
+    _st = normalize_paths(s)
+    if _st["normalized"] or _st["relocated"] or _st["chat"]:
+        print(f"  [paths] 路径已规范化：转相对 {_st['normalized']}、重定位 {_st['relocated']}、"
+              f"聊天图片 {_st['chat']}")
+    if _st["missing"]:
+        print(f"  [paths] 有 {_st['missing']} 处文件没找到（保留原值，未改动）")
+    s.close()
+except Exception as e:
+    print(f"  [paths] 路径巡检跳过：{e}")
+
 # 创建存储目录
 os.makedirs(settings.video_dir, exist_ok=True)
 os.makedirs(settings.subtitle_dir, exist_ok=True)
 os.makedirs(settings.summary_dir, exist_ok=True)
 os.makedirs(settings.data_dir, exist_ok=True)
+# 用户上传的图片（工具化看图：落盘后由 read_image / modlens_read_image 读取）
+os.makedirs(os.path.join(settings.storage_dir, "uploads"), exist_ok=True)
 
 # 前端静态文件
 if os.path.isdir(FRONTEND_DIR):
